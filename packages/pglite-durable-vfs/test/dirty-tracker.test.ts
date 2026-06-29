@@ -97,6 +97,26 @@ describe('dirty tracker', () => {
     ).toEqual(['mkdir', 'rename', 'unlink'])
   })
 
+  it('adds relation identity to relation metadata invalidations', () => {
+    const tracker = new DirtyTracker()
+
+    tracker.recordMetadata({ type: 'unlink', path: '/base/5/16384_vm' })
+
+    expect(tracker.snapshot().invalidations).toEqual([
+      {
+        kind: 'metadata',
+        path: '/base/5/16384_vm',
+        spcOid: 1663,
+        dbOid: 5,
+        relNumber: 16384,
+        fork: 'vm',
+        firstBlock: 0,
+        blockCount: 0,
+        relationSizeChanged: true,
+      },
+    ])
+  })
+
   it('ignores temporary files by default', () => {
     const tracker = new DirtyTracker()
 

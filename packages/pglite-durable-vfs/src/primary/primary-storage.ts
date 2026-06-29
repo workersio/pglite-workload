@@ -12,6 +12,7 @@ export interface DurablePrimaryStorage extends Filesystem {
   endCommitDeferral(): void
   hasUnpublishedChanges(): boolean
   recordLogicalStatement(statement: LogicalStatement): void
+  setPgWalLsnReader(reader: () => string | undefined): void
   flushDeferredCommit(): Promise<void>
   discardDeferredCommit(): void
   syncToFs(): Promise<void>

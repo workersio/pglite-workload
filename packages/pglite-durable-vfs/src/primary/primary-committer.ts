@@ -26,6 +26,7 @@ export interface CommitSummary {
   lsn: string
   previousLsn?: string
   durableOffset?: string
+  pgWalLsn?: string
   pageCount: number
   fileCount: number
   metadataCount: number
@@ -41,6 +42,7 @@ export interface DurablePrimaryCommitterOptions {
   head?: TimelineHead
   journalDir?: string
   writeLease?: DurablePrimaryWriteLease
+  getPgWalLsn?: () => string | undefined
   afterPublish?: (manifest: CommitManifest) => void
 }
 
@@ -66,6 +68,7 @@ export class DurablePrimaryCommitter {
   readonly writeLease?: DurablePrimaryWriteLease
   readonly afterPublish?: (manifest: CommitManifest) => void
 
+  #getPgWalLsn?: () => string | undefined
   #currentLsn?: string
   #lastCommit?: CommitSummary
   #commitSerial = 0
@@ -83,6 +86,7 @@ export class DurablePrimaryCommitter {
     head,
     journalDir,
     writeLease,
+    getPgWalLsn,
     afterPublish,
   }: DurablePrimaryCommitterOptions) {
     this.rootDir = rootDir
@@ -95,6 +99,7 @@ export class DurablePrimaryCommitter {
       journalDir ?? path.join(`${rootDir}.durable`, 'primary'),
     )
     this.writeLease = writeLease
+    this.#getPgWalLsn = getPgWalLsn
     this.afterPublish = afterPublish
   }
 
@@ -129,6 +134,10 @@ export class DurablePrimaryCommitter {
 
   recordLogicalStatement(statement: LogicalStatement): void {
     this.#logicalStatements.push(statement)
+  }
+
+  setPgWalLsnReader(reader: () => string | undefined): void {
+    this.#getPgWalLsn = reader
   }
 
   async flushDeferredCommit(syncBase: () => Promise<void>): Promise<void> {
@@ -217,6 +226,7 @@ export class DurablePrimaryCommitter {
         commitId: entry.commitId,
         createdAt: entry.createdAt,
         snapshot: entry.snapshot,
+        pgWalLsn: this.#getPgWalLsn?.(),
         logicalStatements: entry.logicalStatements,
       })
       const result = await this.pageServer.commit(request)
@@ -234,6 +244,7 @@ export class DurablePrimaryCommitter {
         lsn: entry.lsn,
         previousLsn: entry.previousLsn,
         durableOffset: append.streamOffset,
+        pgWalLsn: request.manifest.pgWalLsn,
         pageCount: request.manifest.stats.pageCount,
         fileCount: request.manifest.stats.fileCount,
         metadataCount: request.manifest.stats.metadataCount,

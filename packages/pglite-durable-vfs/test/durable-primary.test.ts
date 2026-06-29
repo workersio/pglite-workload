@@ -173,6 +173,7 @@ describe('DurablePrimary', () => {
       timeline,
       journalDir,
     })
+    fs.setPgWalLsnReader(() => '0/0000002A')
     fs.mkdir('/base/5', { recursive: true })
     fs.writeFile('/base/5/16384', new Uint8Array(PAGE_SIZE).fill(7))
 
@@ -185,8 +186,10 @@ describe('DurablePrimary', () => {
     expect(fs.journal.readPending()).toBeUndefined()
     expect(fs.lastCommit).toMatchObject({
       timelineId: 'retry-demo',
+      pgWalLsn: '0/0000002A',
       pageCount: 1,
     })
+    expect(pageServer.requests.at(-1)?.manifest.pgWalLsn).toBe('0/0000002A')
     expect(pageServer.requests).toHaveLength(2)
   })
 

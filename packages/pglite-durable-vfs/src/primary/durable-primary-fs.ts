@@ -85,6 +85,10 @@ export class DurablePrimaryFS
     this.committer.recordLogicalStatement(statement)
   }
 
+  setPgWalLsnReader(reader: () => string | undefined): void {
+    this.committer.setPgWalLsnReader(reader)
+  }
+
   async flushDeferredCommit(): Promise<void> {
     await this.committer.flushDeferredCommit(() => super.syncToFs())
   }

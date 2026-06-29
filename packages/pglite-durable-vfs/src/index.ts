@@ -21,6 +21,7 @@ export {
   LazyPrimaryFS,
   type LazyPrimaryFSOptions,
 } from './primary/lazy-primary-fs.js'
+export { getPGliteWalInsertLsn } from './primary/native-wal-lsn.js'
 export { createPrimaryApp } from './primary/app.js'
 export {
   DurableReplica,

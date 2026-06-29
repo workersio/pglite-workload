@@ -270,14 +270,18 @@ function fileInvalidation(file: DirtyFile): InvalidationEntry {
 
 function metadataInvalidation(operation: MetadataOperation): InvalidationEntry {
   if (operation.type === 'rename') {
+    const path = operation.to
     return {
       kind: 'metadata',
-      path: operation.to,
+      path,
+      ...relationMetadataInvalidationFields(path),
     }
   }
+  const path = operation.path
   return {
     kind: 'metadata',
-    path: operation.path,
+    path,
+    ...relationMetadataInvalidationFields(path),
   }
 }
 
@@ -285,4 +289,20 @@ function compareDirtyPages(left: DirtyPage, right: DirtyPage): number {
   const pathOrder = left.path.localeCompare(right.path)
   if (pathOrder !== 0) return pathOrder
   return left.pageNo - right.pageNo
+}
+
+function relationMetadataInvalidationFields(
+  filePath: string,
+): Partial<InvalidationEntry> {
+  const classified = classifyPgPath(filePath)
+  if (classified.kind !== 'relation') return {}
+  return {
+    spcOid: classified.tablespaceOid,
+    dbOid: classified.databaseOid,
+    relNumber: classified.relNumber,
+    fork: classified.fork,
+    firstBlock: classified.firstBlock,
+    blockCount: 0,
+    relationSizeChanged: true,
+  }
 }

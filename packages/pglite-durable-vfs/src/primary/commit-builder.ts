@@ -28,6 +28,7 @@ export interface BuildCommitRequestInput {
   commitId: string
   createdAt: string
   snapshot: DirtySnapshot
+  pgWalLsn?: string
   logicalStatements?: LogicalStatement[]
 }
 
@@ -44,6 +45,7 @@ export function buildCommitRequest({
   commitId,
   createdAt,
   snapshot,
+  pgWalLsn,
   logicalStatements,
 }: BuildCommitRequestInput): BuiltCommitRequest {
   const objects = new Map<string, CommitObjectInput>()
@@ -75,6 +77,7 @@ export function buildCommitRequest({
     previousLsn,
     commitId,
     createdAt,
+    pgWalLsn,
     transactionState,
     replicaApplyMode: replicaApplyMode(operations),
     operations,

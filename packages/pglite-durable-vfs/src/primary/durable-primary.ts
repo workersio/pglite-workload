@@ -19,6 +19,7 @@ import {
 } from '../replica/page-resolver.js'
 import { DurablePrimaryFS } from './durable-primary-fs.js'
 import { LazyPrimaryFS } from './lazy-primary-fs.js'
+import { getPGliteWalInsertLsn } from './native-wal-lsn.js'
 import type { DurablePrimaryWriteLease } from './primary-committer.js'
 import type { CommitSummary, DurablePrimaryStorage } from './primary-storage.js'
 
@@ -89,6 +90,7 @@ export class DurablePrimary {
     this.timeline = timeline
     this.pgliteOptions = pgliteOptions
     this.restartAfterCommit = restartAfterCommit
+    this.fs.setPgWalLsnReader(() => getPGliteWalInsertLsn(this.db))
   }
 
   get timelineId(): string {

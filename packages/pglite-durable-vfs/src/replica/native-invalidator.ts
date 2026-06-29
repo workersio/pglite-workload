@@ -25,12 +25,18 @@ interface NativeInvalidationModule {
     remoteNextXidLow: number,
     remoteNextXidHigh: number,
   ) => number
+  _pgl_invalidate_remote_relation_cache?: (
+    spcOid: number,
+    dbOid: number,
+    relNumber: number,
+  ) => number
 }
 
 interface NativeInvalidationInput {
   ranges: NativeRange[]
   invalidateSystemCaches: boolean
   invalidateSmgr: boolean
+  relationCacheInvalidations: NativeRelation[]
 }
 
 interface NativeRange {
@@ -42,6 +48,8 @@ interface NativeRange {
   blockCount: number
   relationSizeChanged: boolean
 }
+
+type NativeRelation = Pick<NativeRange, 'spcOid' | 'dbOid' | 'relNumber'>
 
 export class PGliteNativeInvalidator implements ReplicaInvalidator {
   readonly getDb: () => PGlite | undefined
@@ -66,6 +74,24 @@ export class PGliteNativeInvalidator implements ReplicaInvalidator {
     const nativeModule = pgliteNativeInvalidationModule(this.getDb())
     if (!nativeModule?._pgl_invalidate_remote_pages) return
 
+    let invalidateSystemCaches = input.invalidateSystemCaches
+    for (const relation of input.relationCacheInvalidations) {
+      const result = nativeModule._pgl_invalidate_remote_relation_cache?.(
+        relation.spcOid,
+        relation.dbOid,
+        relation.relNumber,
+      )
+      if (result === undefined || result === 0) {
+        invalidateSystemCaches = true
+        continue
+      }
+      if (result < 0) {
+        throw new Error(
+          `Native PGlite relcache invalidation failed with ${result}`,
+        )
+      }
+    }
+
     const rangeWords = packRanges(input.ranges)
     const remoteNextXid = remoteNextXidWords(manifest)
     const rangesPtr =
@@ -77,7 +103,7 @@ export class PGliteNativeInvalidator implements ReplicaInvalidator {
       const result = nativeModule._pgl_invalidate_remote_pages(
         rangesPtr,
         input.ranges.length,
-        input.invalidateSystemCaches,
+        invalidateSystemCaches,
         input.invalidateSmgr,
         remoteNextXid.low,
         remoteNextXid.high,
@@ -129,7 +155,8 @@ function isNativeInvalidationModule(
 function nativeInvalidationInput(
   manifest: CommitManifest,
 ): NativeInvalidationInput {
-  const ranges = new Map<string, NativeRange>()
+  const ranges = new Map<string, NativeRange[]>()
+  const relationCacheInvalidations = new Map<string, NativeRelation>()
   let invalidateSystemCaches = false
   let invalidateSmgr = false
 
@@ -139,8 +166,18 @@ function nativeInvalidationInput(
       continue
     }
     if (invalidation.kind === 'metadata') {
-      invalidateSystemCaches = true
-      invalidateSmgr = true
+      const range = nativeRange(invalidation)
+      if (!range) {
+        invalidateSystemCaches = true
+        invalidateSmgr = true
+        continue
+      }
+      addNativeRange(ranges, { ...range, relationSizeChanged: true })
+      relationCacheInvalidations.set(nativeRelationKey(range), {
+        spcOid: range.spcOid,
+        dbOid: range.dbOid,
+        relNumber: range.relNumber,
+      })
       continue
     }
     if (invalidation.kind === 'whole-file') {
@@ -150,29 +187,14 @@ function nativeInvalidationInput(
 
     const range = nativeRange(invalidation)
     if (!range) continue
-
-    const key = [
-      range.spcOid,
-      range.dbOid,
-      range.relNumber,
-      range.forkNumber,
-    ].join('/')
-    const existing = ranges.get(key)
-    if (!existing) {
-      ranges.set(key, range)
-      continue
-    }
-
-    existing.firstBlock = Math.min(existing.firstBlock, range.firstBlock)
-    existing.blockCount = 0
-    existing.relationSizeChanged =
-      existing.relationSizeChanged || range.relationSizeChanged
+    addNativeRange(ranges, range)
   }
 
   return {
-    ranges: [...ranges.values()],
+    ranges: [...ranges.values()].flat(),
     invalidateSystemCaches,
     invalidateSmgr,
+    relationCacheInvalidations: [...relationCacheInvalidations.values()],
   }
 }
 
@@ -207,6 +229,62 @@ function nativeRange(invalidation: InvalidationEntry): NativeRange | undefined {
     blockCount: invalidation.blockCount ?? 0,
     relationSizeChanged: invalidation.relationSizeChanged === true,
   }
+}
+
+function addNativeRange(
+  ranges: Map<string, NativeRange[]>,
+  range: NativeRange,
+): void {
+  const key = nativeRangeKey(range)
+  const existing = ranges.get(key) ?? []
+  const merged: NativeRange[] = []
+  let next = { ...range }
+
+  for (const current of existing) {
+    if (!nativeRangesCanMerge(current, next)) {
+      merged.push(current)
+      continue
+    }
+    next = mergeNativeRanges(current, next)
+  }
+
+  merged.push(next)
+  merged.sort((left, right) => left.firstBlock - right.firstBlock)
+  ranges.set(key, merged)
+}
+
+function nativeRangesCanMerge(left: NativeRange, right: NativeRange): boolean {
+  const leftEnd = nativeRangeEnd(left)
+  const rightEnd = nativeRangeEnd(right)
+  return left.firstBlock <= rightEnd && right.firstBlock <= leftEnd
+}
+
+function mergeNativeRanges(left: NativeRange, right: NativeRange): NativeRange {
+  const firstBlock = Math.min(left.firstBlock, right.firstBlock)
+  const end = Math.max(nativeRangeEnd(left), nativeRangeEnd(right))
+  return {
+    ...left,
+    firstBlock,
+    blockCount:
+      end === Number.POSITIVE_INFINITY ? 0 : Math.max(0, end - firstBlock),
+    relationSizeChanged: left.relationSizeChanged || right.relationSizeChanged,
+  }
+}
+
+function nativeRangeEnd(range: NativeRange): number {
+  return range.blockCount === 0
+    ? Number.POSITIVE_INFINITY
+    : range.firstBlock + range.blockCount
+}
+
+function nativeRangeKey(range: NativeRange): string {
+  return [range.spcOid, range.dbOid, range.relNumber, range.forkNumber].join(
+    '/',
+  )
+}
+
+function nativeRelationKey(relation: NativeRelation): string {
+  return [relation.spcOid, relation.dbOid, relation.relNumber].join('/')
 }
 
 function packRanges(ranges: NativeRange[]): Uint32Array {
