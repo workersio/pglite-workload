@@ -18,7 +18,10 @@ import type {
   PGliteOptions,
   Transaction,
 } from './interface.js'
-import PostgresModFactory, { type PostgresMod } from './postgresMod.js'
+import PostgresModFactory, {
+  type PostgresFactory,
+  type PostgresMod,
+} from './postgresMod.js'
 
 // Importing the source as the built version is not ESM compatible
 import { Parser as ProtocolParser, serialize } from '@electric-sql/pg-protocol'
@@ -354,6 +357,13 @@ export class PGlite
         'Shared wasmMemory requires an explicit shared-memory pgliteWasmModule. Build pglite-shared.wasm with PGLITE_BUILD_SHARED_MEMORY=true and pass it as pgliteWasmModule.',
       )
     }
+    if (isSharedWasmMemory(wasmMemory) && !options.pgliteModFactory) {
+      throw new Error(
+        'Shared wasmMemory requires an explicit shared-memory pgliteModFactory. Build pglite-shared.js with PGLITE_BUILD_SHARED_MEMORY=true and pass its default export as pgliteModFactory.',
+      )
+    }
+    const pgliteModFactory: PostgresFactory =
+      options.pgliteModFactory ?? PostgresModFactory
 
     let emscriptenOpts: Partial<PostgresMod> = {
       thisProgram: POSTGRES_EXE_PATH,
@@ -534,7 +544,7 @@ export class PGlite
     await fsBundleBufferPromise
 
     // Load the database engine
-    this.mod = await PostgresModFactory(emscriptenOpts)
+    this.mod = await pgliteModFactory(emscriptenOpts)
 
     // Sync the filesystem from any previous store
     await this.fs!.initialSyncFs()
@@ -566,6 +576,11 @@ export class PGlite
           pgInitDbOpts.extensions = undefined
           pgInitDbOpts.loadDataDir = undefined
           pgInitDbOpts.wasmMemory = undefined
+          if (isSharedWasmMemory(wasmMemory)) {
+            pgInitDbOpts.pgliteWasmModule = undefined
+            pgInitDbOpts.pgliteModFactory = undefined
+            pgInitDbOpts.fsBundle = undefined
+          }
           const pg_initDb = await PGlite.create(pgInitDbOpts)
 
           // Initialize the database

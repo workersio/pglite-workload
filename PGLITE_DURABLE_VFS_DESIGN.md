@@ -2330,7 +2330,7 @@ Replica startup local-write smoke test:
   libraries are not atomics-compatible yet.
 - Create shared WASM memory with `{ shared: true, initial, maximum }`.
 - Prefer fixed memory for the first prototype. The shared build defaults to a
-  128 MiB fixed heap via `PGLITE_SHARED_MEMORY_SIZE=128MB`; the TS helper
+  256 MiB fixed heap via `PGLITE_SHARED_MEMORY_SIZE=256MB`; the TS helper
   defaults to the same fixed-size `SharedArrayBuffer`.
 - Run PGlite compute inside a Node `Worker`.
 - Implement `sab-control-block.ts` for request/response state and

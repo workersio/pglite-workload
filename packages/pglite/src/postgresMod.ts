@@ -66,7 +66,7 @@ export interface PostgresMod
   _pq_buffer_remaining_data: () => number
 }
 
-type PostgresFactory<T extends PostgresMod = PostgresMod> = (
+export type PostgresFactory<T extends PostgresMod = PostgresMod> = (
   moduleOverrides?: Partial<T>,
 ) => Promise<T>
 

@@ -47,10 +47,18 @@ describe('createSharedPGliteMemory', () => {
     const dir = await mkdtemp(join(tmpdir(), 'pglite-shared-wasm-'))
     try {
       const wasmPath = join(dir, 'pglite-shared.wasm')
+      const modulePath = join(dir, 'pglite-shared.js')
+      const dataPath = join(dir, 'pglite-shared.data')
+      await writeFile(join(dir, 'package.json'), '{"type":"module"}\n')
       await writeFile(
         wasmPath,
         new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]),
       )
+      await writeFile(
+        modulePath,
+        'export default async function pgliteSharedFactory() { return {} }\n',
+      )
+      await writeFile(dataPath, new Uint8Array([1, 2, 3]))
 
       const options = await loadSharedPGliteRuntimeOptions({
         wasmPath,
@@ -58,7 +66,11 @@ describe('createSharedPGliteMemory', () => {
         maximumBytes: 64 * 1024,
       })
 
+      expect(options.pgliteModFactory).toBeTypeOf('function')
       expect(options.pgliteWasmModule).toBeInstanceOf(WebAssembly.Module)
+      expect([...new Uint8Array(await options.fsBundle.arrayBuffer())]).toEqual(
+        [1, 2, 3],
+      )
       expect(options.wasmMemory.buffer).toBeInstanceOf(SharedArrayBuffer)
       expect(options.wasmMemory.buffer.byteLength).toBe(64 * 1024)
     } finally {

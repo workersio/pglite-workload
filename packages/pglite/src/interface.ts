@@ -4,6 +4,7 @@ import type {
 } from '@electric-sql/pg-protocol/messages'
 import type { Filesystem } from './fs/base.js'
 import type { DumpTarCompressionOptions } from './fs/tarUtils.js'
+import type { PostgresFactory } from './postgresMod.js'
 import type { Parser, Serializer } from './types.js'
 
 export type FilesystemType = 'nodefs' | 'idbfs' | 'memoryfs'
@@ -97,6 +98,7 @@ export interface PGliteOptions<TExtensions extends Extensions = Extensions> {
   initialMemory?: number
   wasmMemory?: WebAssembly.Memory
   pgliteWasmModule?: WebAssembly.Module
+  pgliteModFactory?: PostgresFactory
   initdbWasmModule?: WebAssembly.Module
   fsBundle?: Blob | File
   parsers?: ParserOptions

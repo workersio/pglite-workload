@@ -13,6 +13,7 @@ export type NodePGliteWorkerPGliteOptions = Omit<
   | 'initdbWasmModule'
   | 'loadDataDir'
   | 'parsers'
+  | 'pgliteModFactory'
   | 'pgliteWasmModule'
   | 'serializers'
   | 'wasmMemory'
@@ -34,6 +35,8 @@ interface WorkerInitData {
 
 interface SerializedSharedRuntimeOptions {
   wasmPath: string
+  modulePath?: string
+  dataPath?: string
   initialBytes?: number
   maximumBytes?: number
 }
@@ -179,8 +182,11 @@ function serializeWorkerInitData(
     pgliteOptions: options.pgliteOptions,
     sharedRuntime: options.sharedRuntime
       ? {
-          ...options.sharedRuntime,
           wasmPath: options.sharedRuntime.wasmPath.toString(),
+          modulePath: options.sharedRuntime.modulePath?.toString(),
+          dataPath: options.sharedRuntime.dataPath?.toString(),
+          initialBytes: options.sharedRuntime.initialBytes,
+          maximumBytes: options.sharedRuntime.maximumBytes,
         }
       : undefined,
   }
@@ -195,9 +201,12 @@ function deserializeError(error: SerializedError): Error {
 
 export const NODE_PGLITE_WORKER_SOURCE = String.raw`
 const { readFile } = require('node:fs/promises')
+const { basename, dirname, extname, join, resolve } = require('node:path')
 const { parentPort, workerData } = require('node:worker_threads')
+const { fileURLToPath, pathToFileURL } = require('node:url')
 
 const WASM_PAGE_BYTES = 64 * 1024
+const DEFAULT_SHARED_PGLITE_MEMORY_BYTES = 256 * 1024 * 1024
 
 let db
 
@@ -274,22 +283,73 @@ async function handleMessage(message) {
 
 async function loadSharedPGliteRuntimeOptions({
   wasmPath,
+  modulePath,
+  dataPath,
   initialBytes,
   maximumBytes,
 }) {
-  const bytes = await readFile(pathFromString(wasmPath))
+  const resolvedModulePath = modulePath ?? siblingArtifactPath(wasmPath, '.js')
+  const resolvedDataPath = dataPath ?? siblingArtifactPath(wasmPath, '.data')
+  const [wasmBytes, dataBytes, pgliteModFactory] = await Promise.all([
+    readFile(filePath(wasmPath)),
+    readFile(filePath(resolvedDataPath)),
+    loadPGliteModFactory(resolvedModulePath),
+  ])
   return {
-    pgliteWasmModule: await WebAssembly.compile(bytes),
+    fsBundle: new Blob([new Uint8Array(dataBytes)]),
+    pgliteModFactory,
+    pgliteWasmModule: await WebAssembly.compile(wasmBytes),
     wasmMemory: createSharedPGliteMemory({ initialBytes, maximumBytes }),
   }
 }
 
-function pathFromString(filePath) {
-  return filePath.startsWith('file:') ? new URL(filePath) : filePath
+async function loadPGliteModFactory(modulePath) {
+  const moduleNamespace = await import(moduleSpecifier(modulePath))
+  const factory = moduleNamespace.default
+  if (typeof factory !== 'function') {
+    throw new Error('Shared PGlite module must export a default factory')
+  }
+  return factory
+}
+
+function siblingArtifactPath(path, extension) {
+  const sourcePath = filePath(path)
+  return join(
+    dirname(sourcePath),
+    basename(sourcePath, extname(sourcePath)) + extension,
+  )
+}
+
+function moduleSpecifier(path) {
+  return pathToFileURL(filePath(path)).href
+}
+
+function filePath(path) {
+  if (path instanceof URL) {
+    assertFileUrl(path)
+    return fileURLToPath(path)
+  }
+  if (path.startsWith('file:')) {
+    const url = new URL(path)
+    assertFileUrl(url)
+    return fileURLToPath(url)
+  }
+  return resolve(path)
+}
+
+function assertFileUrl(url) {
+  if (url.protocol !== 'file:') {
+    throw new Error(
+      'Shared PGlite runtime artifact paths must be filesystem paths or file URLs',
+    )
+  }
 }
 
 function createSharedPGliteMemory({ initialBytes, maximumBytes } = {}) {
-  const initial = wasmPageCount(initialBytes ?? 128 * 1024 * 1024, 'initialBytes')
+  const initial = wasmPageCount(
+    initialBytes ?? DEFAULT_SHARED_PGLITE_MEMORY_BYTES,
+    'initialBytes',
+  )
   const maximum = wasmPageCount(maximumBytes ?? initial * WASM_PAGE_BYTES, 'maximumBytes')
   if (maximum < initial) {
     throw new Error('maximumBytes must be greater than or equal to initialBytes')
