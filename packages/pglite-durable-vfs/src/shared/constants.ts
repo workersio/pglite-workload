@@ -1,0 +1,4 @@
+export const PAGE_SIZE = 8192
+export const DEFAULT_TABLESPACE_OID = 1663
+export const GLOBAL_TABLESPACE_OID = 1664
+export const RELSEG_SIZE = 131072
