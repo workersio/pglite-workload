@@ -18,9 +18,44 @@ export {
 } from './primary/durable-primary-fs.js'
 export { createPrimaryApp } from './primary/app.js'
 export {
+  DurableReplica,
+  createDurableReplica,
+  type DurableReplicaExecResult,
+  type DurableReplicaOptions,
+  type DurableReplicaQueryOptions,
+  type DurableReplicaQueryResult,
+  type DurableReplicaStatus,
+  type DurableReplicaTransactionResult,
+} from './replica/durable-replica.js'
+export { createReplicaApp } from './replica/app.js'
+export {
+  LazyReplicaFS,
+  type LazyReplicaCacheStats,
+  type LazyReplicaFSOptions,
+} from './replica/lazy-replica-fs.js'
+export { ReplicaPageIndex } from './replica/page-index.js'
+export {
+  CountingPageResolver,
+  DiskPageResolver,
+  type PageResolver,
+} from './replica/page-resolver.js'
+export {
+  ReplicaApplyJournal,
+  type PendingReplicaApply,
+  type ReplicaApplyState,
+} from './replica/apply-journal.js'
+export { ReplicaQueryGate } from './replica/query-gate.js'
+export {
+  ReplicaTailer,
+  type ReplicaInvalidator,
+  type ReplicaTailerOptions,
+  type ReplicaTailerStatus,
+} from './replica/tailer.js'
+export {
   PageServerHttpClient,
   type PageServerApi,
   type PageServerHttpClientOptions,
+  type PageServerReadApi,
 } from './pageserver/client.js'
 export {
   DurableTimeline,

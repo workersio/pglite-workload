@@ -1,10 +1,33 @@
-import type { CommitRequest, CommitResult, TimelineHead } from './types.js'
+import type {
+  CommitManifest,
+  CommitRequest,
+  CommitResult,
+  TimelineHead,
+} from './types.js'
 
 export interface PageServerApi {
   createTimeline(timelineId: string): Promise<TimelineHead>
   getHead(timelineId: string): Promise<TimelineHead | undefined>
   commit(request: CommitRequest): Promise<CommitResult>
   commitUrl(timelineId: string, lsn: string): string
+}
+
+export interface PageServerReadApi {
+  getCommit(
+    timelineId: string,
+    lsn: string,
+  ): Promise<CommitManifest | undefined>
+  getPageBytes(
+    timelineId: string,
+    filePath: string,
+    pageNo: number,
+    lsn: string,
+  ): Promise<Uint8Array | undefined>
+  getFileBytes(
+    timelineId: string,
+    filePath: string,
+    lsn: string,
+  ): Promise<Uint8Array | undefined>
 }
 
 export interface PageServerHttpClientOptions {
@@ -65,6 +88,57 @@ export class PageServerHttpClient implements PageServerApi {
     return (await response.json()) as CommitResult
   }
 
+  async getCommit(
+    timelineId: string,
+    lsn: string,
+  ): Promise<CommitManifest | undefined> {
+    const response = await this.fetch(this.commitUrl(timelineId, lsn))
+    if (response.status === 404) return undefined
+    if (!response.ok) {
+      throw new Error(await responseError(response))
+    }
+    return (await response.json()) as CommitManifest
+  }
+
+  async getPageBytes(
+    timelineId: string,
+    filePath: string,
+    pageNo: number,
+    lsn: string,
+  ): Promise<Uint8Array | undefined> {
+    const response = await this.fetch(
+      this.url(
+        `/v1/timelines/${encodeURIComponent(timelineId)}/pages${normalizeRemotePath(
+          filePath,
+        )}?lsn=${encodeURIComponent(lsn)}&pageNo=${pageNo}`,
+      ),
+    )
+    if (response.status === 404) return undefined
+    if (!response.ok) {
+      throw new Error(await responseError(response))
+    }
+    return new Uint8Array(await response.arrayBuffer())
+  }
+
+  async getFileBytes(
+    timelineId: string,
+    filePath: string,
+    lsn: string,
+  ): Promise<Uint8Array | undefined> {
+    const response = await this.fetch(
+      this.url(
+        `/v1/timelines/${encodeURIComponent(timelineId)}/files${normalizeRemotePath(
+          filePath,
+        )}?lsn=${encodeURIComponent(lsn)}`,
+      ),
+    )
+    if (response.status === 404) return undefined
+    if (!response.ok) {
+      throw new Error(await responseError(response))
+    }
+    return new Uint8Array(await response.arrayBuffer())
+  }
+
   commitUrl(timelineId: string, lsn: string): string {
     return this.url(
       `/v1/timelines/${encodeURIComponent(timelineId)}/commits/${encodeURIComponent(
@@ -76,6 +150,10 @@ export class PageServerHttpClient implements PageServerApi {
   private url(path: string): string {
     return `${this.baseUrl}${path}`
   }
+}
+
+function normalizeRemotePath(filePath: string): string {
+  return filePath.startsWith('/') ? filePath : `/${filePath}`
 }
 
 async function responseError(response: Response): Promise<string> {
