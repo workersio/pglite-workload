@@ -665,6 +665,17 @@ await testEsmCjsAndDTC(async (importType) => {
       expect(instanceMemSize).toEqual(wantedMemSize)
     })
 
+    it('wasmMemory works', async () => {
+      await db.close()
+      const memory = new WebAssembly.Memory({
+        initial: 2048,
+        maximum: 32768,
+      })
+      db = await PGlite.create({ wasmMemory: memory })
+
+      expect(db.Module.HEAPU8.buffer).toBe(memory.buffer)
+    })
+
     // this tests the parameter 'max_parallel_workers_per_gather=0',
     it('it shouldnt use parallel workers on gather', async () => {
       const ROWS = 400_000

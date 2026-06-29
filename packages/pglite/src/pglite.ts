@@ -341,12 +341,14 @@ export class PGlite
       fsBundleBuffer = buffer
     })
 
-    const wasmMemory = new WebAssembly.Memory({
-      initial: options.initialMemory
-        ? options.initialMemory / (64 * 1024)
-        : 2048,
-      maximum: 32768,
-    })
+    const wasmMemory =
+      options.wasmMemory ??
+      new WebAssembly.Memory({
+        initial: options.initialMemory
+          ? options.initialMemory / (64 * 1024)
+          : 2048,
+        maximum: 32768,
+      })
 
     let emscriptenOpts: Partial<PostgresMod> = {
       thisProgram: POSTGRES_EXE_PATH,
@@ -558,6 +560,7 @@ export class PGlite
           pgInitDbOpts.dataDir = undefined
           pgInitDbOpts.extensions = undefined
           pgInitDbOpts.loadDataDir = undefined
+          pgInitDbOpts.wasmMemory = undefined
           const pg_initDb = await PGlite.create(pgInitDbOpts)
 
           // Initialize the database

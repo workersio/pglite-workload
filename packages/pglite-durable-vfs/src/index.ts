@@ -71,6 +71,10 @@ export {
   type SabControlBlock,
 } from './sab/sab-control-block.js'
 export {
+  createSharedPGliteMemory,
+  type SharedPGliteMemoryOptions,
+} from './sab/shared-pglite-memory.js'
+export {
   createDurableVfsDemo,
   type DurableVfsDemo,
   type DurableVfsDemoOptions,

@@ -95,6 +95,7 @@ export interface PGliteOptions<TExtensions extends Extensions = Extensions> {
   loadDataDir?: Blob | File
   icuDataDir?: Blob | File
   initialMemory?: number
+  wasmMemory?: WebAssembly.Memory
   pgliteWasmModule?: WebAssembly.Module
   initdbWasmModule?: WebAssembly.Module
   fsBundle?: Blob | File
