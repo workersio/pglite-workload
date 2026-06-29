@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { compareLsn, parseLsn } from '../src/shared/lsn.js'
+import {
+  compareLsn,
+  formatLsn,
+  incrementLsn,
+  parseLsn,
+} from '../src/shared/lsn.js'
 
 describe('LSN utilities', () => {
   it('compares LSNs within and across high parts', () => {
@@ -11,5 +16,11 @@ describe('LSN utilities', () => {
 
   it('rejects invalid LSNs', () => {
     expect(() => parseLsn('not-an-lsn')).toThrow(/Invalid LSN/)
+  })
+
+  it('formats and increments LSN values', () => {
+    expect(formatLsn(0x100000010n)).toBe('1/00000010')
+    expect(incrementLsn(undefined)).toBe('0/00000010')
+    expect(incrementLsn('0/FFFFFFF0')).toBe('1/00000000')
   })
 })

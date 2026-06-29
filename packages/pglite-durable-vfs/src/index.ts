@@ -1,5 +1,27 @@
 export { TrackingNodeFS } from './fs/tracking-node-fs.js'
 export {
+  DurablePrimary,
+  createDurablePrimary,
+  type DurableExecResult,
+  type DurablePrimaryFsMode,
+  type DurablePrimaryOptions,
+  type DurablePrimaryStatus,
+  type DurableQueryResult,
+  type DurableTransactionResult,
+} from './primary/durable-primary.js'
+export {
+  DurablePrimaryFS,
+  type CommitSummary,
+  type DurablePrimaryFSOptions,
+  type PendingPrimaryCommit,
+} from './primary/durable-primary-fs.js'
+export { createPrimaryApp } from './primary/app.js'
+export {
+  PageServerHttpClient,
+  type PageServerApi,
+  type PageServerHttpClientOptions,
+} from './pageserver/client.js'
+export {
   DurableTimeline,
   commitEventFromManifest,
   type AppendCommitEventResult,
@@ -42,5 +64,5 @@ export type {
   ReplicaApplyMode,
   TimelineHead,
 } from './pageserver/types.js'
-export { compareLsn, parseLsn } from './shared/lsn.js'
+export { compareLsn, formatLsn, incrementLsn, parseLsn } from './shared/lsn.js'
 export { PAGE_SIZE, RELSEG_SIZE } from './shared/constants.js'

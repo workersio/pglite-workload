@@ -18,3 +18,17 @@ export function parseLsn(lsn: string): bigint {
   const low = BigInt(`0x${match[2]}`)
   return (high << 32n) + low
 }
+
+export function formatLsn(value: bigint): string {
+  if (value < 0n) throw new Error(`Invalid negative LSN: ${value}`)
+  const high = value >> 32n
+  const low = value & 0xffffffffn
+  return `${high.toString(16).toUpperCase()}/${low
+    .toString(16)
+    .toUpperCase()
+    .padStart(8, '0')}`
+}
+
+export function incrementLsn(lsn: string | undefined, amount = 0x10n): string {
+  return formatLsn(lsn ? parseLsn(lsn) + amount : amount)
+}
