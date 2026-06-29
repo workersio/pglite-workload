@@ -6,6 +6,7 @@ import type {
   ProducerJournalState,
 } from '../durable/timeline-stream.js'
 import type { DirtySnapshot } from '../fs/dirty-tracker.js'
+import type { LogicalStatement } from '../pageserver/types.js'
 import {
   ensureDir,
   readJsonFileIfExists,
@@ -21,6 +22,7 @@ export interface PendingPrimaryCommit {
   createdAt: string
   producerState: ProducerJournalState
   snapshot: DirtySnapshot
+  logicalStatements?: LogicalStatement[]
 }
 
 export interface CompletedPrimaryCommit extends PendingPrimaryCommit {

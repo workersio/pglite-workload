@@ -21,6 +21,7 @@ export interface DurablePrimaryOptions {
   pageServerUrl: string
   streamUrl: string
   fsMode?: DurablePrimaryFsMode
+  restartAfterCommit?: boolean
   producerId?: string
   fetch?: typeof fetch
   journalDir?: string
@@ -43,7 +44,7 @@ export interface DurableTransactionResult<T> {
 }
 
 export class DurablePrimary {
-  readonly db: PGlite
+  db: PGlite
 
   readonly fs: DurablePrimaryFS
 
@@ -51,21 +52,31 @@ export class DurablePrimary {
 
   readonly timeline: DurableTimeline
 
+  readonly pgliteOptions?: Omit<PGliteOptions, 'dataDir' | 'fs'>
+
+  restartAfterCommit: boolean
+
   constructor({
     db,
     fs,
     pageServer,
     timeline,
+    pgliteOptions,
+    restartAfterCommit = true,
   }: {
     db: PGlite
     fs: DurablePrimaryFS
     pageServer: PageServerApi
     timeline: DurableTimeline
+    pgliteOptions?: Omit<PGliteOptions, 'dataDir' | 'fs'>
+    restartAfterCommit?: boolean
   }) {
     this.db = db
     this.fs = fs
     this.pageServer = pageServer
     this.timeline = timeline
+    this.pgliteOptions = pgliteOptions
+    this.restartAfterCommit = restartAfterCommit
   }
 
   get timelineId(): string {
@@ -86,13 +97,19 @@ export class DurablePrimary {
     options?: QueryOptions,
   ): Promise<DurableQueryResult<T>> {
     const before = this.fs.commitSerial
-    const result = await this.db.query<T>(sql, params, options)
+    const result = await this.runWithDeferredCommit(
+      () => this.db.query<T>(sql, params, options),
+      { sql, params },
+    )
     return { result, commit: this.commitAfter(before) }
   }
 
   async exec(sql: string, options?: QueryOptions): Promise<DurableExecResult> {
     const before = this.fs.commitSerial
-    const result = await this.db.exec(sql, options)
+    const result = await this.runWithDeferredCommit(
+      () => this.db.exec(sql, options),
+      { sql },
+    )
     return { result, commit: this.commitAfter(before) }
   }
 
@@ -100,8 +117,11 @@ export class DurablePrimary {
     callback: (tx: Transaction) => Promise<T>,
   ): Promise<DurableTransactionResult<T>> {
     const before = this.fs.commitSerial
-    const result = await this.db.transaction(callback)
-    await this.db.syncToFs()
+    const result = await this.runWithDeferredCommit(async () => {
+      const transactionResult = await this.db.transaction(callback)
+      await this.db.syncToFs()
+      return transactionResult
+    })
     return { result, commit: this.commitAfter(before) }
   }
 
@@ -120,6 +140,47 @@ export class DurablePrimary {
 
   private commitAfter(serial: number): CommitSummary | undefined {
     return this.fs.commitSerial > serial ? this.fs.lastCommit : undefined
+  }
+
+  private async runWithDeferredCommit<T>(
+    callback: () => Promise<T>,
+    logicalStatement?: { sql: string; params?: unknown[] },
+  ): Promise<T> {
+    this.fs.beginCommitDeferral()
+    let succeeded = false
+    try {
+      const result = await callback()
+      if (this.fs.hasUnpublishedChanges()) {
+        if (logicalStatement) this.fs.recordLogicalStatement(logicalStatement)
+        await this.db.exec('CHECKPOINT')
+      }
+      succeeded = true
+      return result
+    } finally {
+      this.fs.endCommitDeferral()
+      if (succeeded) {
+        const beforeFlush = this.fs.commitSerial
+        await this.fs.flushDeferredCommit()
+        if (this.restartAfterCommit && this.fs.commitSerial > beforeFlush) {
+          await this.restartAfterCleanShutdown()
+        }
+      }
+    }
+  }
+
+  private async restartAfterCleanShutdown(): Promise<void> {
+    await this.db.close()
+    await this.fs.syncToFs()
+    this.fs.beginCommitDeferral()
+    try {
+      this.db = await PGlite.create({
+        ...this.pgliteOptions,
+        fs: this.fs,
+      })
+    } finally {
+      this.fs.endCommitDeferral()
+      this.fs.discardDeferredCommit()
+    }
   }
 }
 
@@ -159,5 +220,12 @@ export async function createDurablePrimary(
     fs,
   })
 
-  return new DurablePrimary({ db, fs, pageServer, timeline })
+  return new DurablePrimary({
+    db,
+    fs,
+    pageServer,
+    timeline,
+    pgliteOptions: options.pgliteOptions,
+    restartAfterCommit: options.restartAfterCommit,
+  })
 }

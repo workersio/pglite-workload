@@ -17,20 +17,16 @@ export class DiskPageResolver implements PageResolver {
   }
 
   getPageBytes(version: PageVersion): Uint8Array | undefined {
-    return this.store.getPageBytes(
-      version.timelineId,
-      version.path,
-      version.pageNo,
-      version.lsn,
-    )
+    return this.getObjectBytes(version.sha256)
   }
 
   getFileBytes(version: FileVersion): Uint8Array | undefined {
-    return this.store.getFileBytes(
-      version.timelineId,
-      version.path,
-      version.lsn,
-    )
+    return this.getObjectBytes(version.sha256)
+  }
+
+  private getObjectBytes(sha256: string): Uint8Array | undefined {
+    if (!this.store.objectStore.has(sha256)) return undefined
+    return this.store.objectStore.getBytes(sha256)
   }
 }
 

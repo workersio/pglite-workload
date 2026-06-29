@@ -112,4 +112,21 @@ describe('dirty tracker', () => {
 
     expect(tracker.snapshot().isEmpty).toBe(true)
   })
+
+  it('ignores replica-local runtime files by default', () => {
+    const tracker = new DirtyTracker()
+
+    tracker.recordWrite({
+      path: '/postmaster.pid',
+      position: 0,
+      length: 32,
+      fileSize: 32,
+    })
+    tracker.recordMetadata({
+      type: 'unlink',
+      path: '/pg_notify/0000',
+    })
+
+    expect(tracker.snapshot().isEmpty).toBe(true)
+  })
 })

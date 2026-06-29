@@ -10,6 +10,7 @@ import {
 
 import {
   classifyPgPath,
+  isReplicaLocalPath,
   normalizePgPath,
   type ClassifiedPath,
 } from '../fs/path-classifier.js'
@@ -52,9 +53,12 @@ export class LazyReplicaFS extends BaseFilesystem {
   readonly allowLocalWrite: (filePath: string) => boolean
 
   #appliedLsn?: string
+  #allowRecoveryWrites = false
   #fdPaths = new Map<number, string>()
   #cachedPages = new Map<string, string>()
   #cachedFiles = new Map<string, string>()
+  #staleFilePaths = new Set<string>()
+  #staleRelationPaths = new Set<string>()
   #stats: LazyReplicaCacheStats = {
     pageFetches: 0,
     fileFetches: 0,
@@ -72,6 +76,7 @@ export class LazyReplicaFS extends BaseFilesystem {
     this.pageSize = options.pageSize ?? PAGE_SIZE
     this.allowLocalWrite = options.allowLocalWrite ?? defaultAllowLocalWrite
     mkdirSync(this.rootDir, { recursive: true })
+    this.ensureLocalRuntimeDirectories()
   }
 
   get appliedLsn(): string | undefined {
@@ -86,6 +91,38 @@ export class LazyReplicaFS extends BaseFilesystem {
     this.invalidateManifest(manifest)
     this.index.applyManifest(manifest)
     this.#appliedLsn = manifest.lsn
+  }
+
+  setRecoveryWrites(enabled: boolean): void {
+    this.#allowRecoveryWrites = enabled
+  }
+
+  prepareForRecovery({
+    resetLocalCache = false,
+  }: { resetLocalCache?: boolean } = {}): void {
+    if (resetLocalCache) {
+      this.#cachedFiles.clear()
+      this.#cachedPages.clear()
+      this.removeStaleLocalPaths()
+      this.#staleFilePaths.clear()
+      this.#staleRelationPaths.clear()
+      this.materializeVisibleRemoteState()
+      this.ensureLocalRuntimeDirectories()
+      return
+    }
+
+    this.#cachedFiles.clear()
+    this.#cachedPages.clear()
+    for (const filePath of this.#staleFilePaths) {
+      removeLocalPath(this.resolvePath(filePath))
+    }
+    this.#staleFilePaths.clear()
+    for (const filePath of this.#staleRelationPaths) {
+      removeLocalPath(this.resolvePath(filePath))
+    }
+    this.#staleRelationPaths.clear()
+    removeLocalPath(this.resolvePath('/global/pg_control'))
+    this.ensureLocalRuntimeDirectories()
   }
 
   chmod(filePath: string, mode: number): void {
@@ -118,16 +155,22 @@ export class LazyReplicaFS extends BaseFilesystem {
 
   open(filePath: string, flags?: string, mode = 0o666): number {
     const normalizedPath = normalizePgPath(filePath)
-    const openFlags = flags ?? 'r'
-    if (isMutatingOpenFlag(openFlags)) {
-      this.assertLocalWrite(normalizedPath)
-    } else {
+    const resolvedPath = this.resolvePath(normalizedPath)
+    const hasExistingPath =
+      existsSync(resolvedPath) || this.hasRemotePath(normalizedPath)
+    const openFlags =
+      flags ??
+      (this.canWriteLocal(normalizedPath)
+        ? hasExistingPath
+          ? 'r+'
+          : 'w+'
+        : 'r')
+    if (shouldMaterializeBeforeOpen(openFlags)) {
       this.ensureStatPath(normalizedPath)
     }
+    if (isMutatingOpenFlag(openFlags)) this.assertLocalWrite(normalizedPath)
 
-    const fd = withFsErrors(() =>
-      fs.openSync(this.resolvePath(normalizedPath), openFlags, mode),
-    )
+    const fd = withFsErrors(() => fs.openSync(resolvedPath, openFlags, mode))
     this.#fdPaths.set(fd, normalizedPath)
     return fd
   }
@@ -176,6 +219,7 @@ export class LazyReplicaFS extends BaseFilesystem {
 
   truncate(filePath: string, len = 0): void {
     this.assertLocalWrite(filePath)
+    this.invalidateLocalCache(filePath)
     withFsErrors(() => fs.truncateSync(this.resolvePath(filePath), len))
   }
 
@@ -195,6 +239,7 @@ export class LazyReplicaFS extends BaseFilesystem {
     options: { encoding?: BufferEncoding; mode?: number; flag?: string } = {},
   ): void {
     this.assertLocalWrite(filePath)
+    this.invalidateLocalCache(filePath)
     const resolvedPath = this.resolvePath(filePath)
     withFsErrors(() =>
       fs.mkdirSync(path.dirname(resolvedPath), { recursive: true }),
@@ -211,6 +256,7 @@ export class LazyReplicaFS extends BaseFilesystem {
   ): number {
     const filePath = this.fdPath(fd)
     this.assertLocalWrite(filePath)
+    this.invalidateLocalCache(filePath)
     const data = writeBufferView(buffer, offset, length)
     return withFsErrors(() =>
       fs.writeSync(fd, data, 0, data.byteLength, position),
@@ -236,10 +282,22 @@ export class LazyReplicaFS extends BaseFilesystem {
   private invalidateManifest(manifest: CommitManifest): void {
     for (const operation of manifest.operations) {
       if (operation.type === 'page') {
-        this.#cachedPages.delete(pageKey(operation.path, operation.pageNo))
+        const normalizedPath = normalizePgPath(operation.path)
+        this.#cachedPages.delete(pageKey(normalizedPath, operation.pageNo))
+        this.#staleRelationPaths.add(normalizedPath)
       } else if (operation.type === 'file') {
-        this.#cachedFiles.delete(normalizePgPath(operation.path))
-        removeLocalPath(this.resolvePath(operation.path))
+        const normalizedPath = normalizePgPath(operation.path)
+        this.#cachedFiles.delete(normalizedPath)
+        this.#staleFilePaths.add(normalizedPath)
+        removeLocalPath(this.resolvePath(normalizedPath))
+      } else if (operation.type === 'mkdir') {
+        const resolvedPath = this.resolvePath(operation.path)
+        withFsErrors(() =>
+          fs.mkdirSync(resolvedPath, {
+            recursive: true,
+            mode: operation.mode,
+          }),
+        )
       } else if (operation.type === 'truncate') {
         removeLocalPath(this.resolvePath(operation.path))
       } else if (operation.type === 'unlink') {
@@ -247,8 +305,51 @@ export class LazyReplicaFS extends BaseFilesystem {
       } else if (operation.type === 'rename') {
         removeLocalPath(this.resolvePath(operation.from))
         removeLocalPath(this.resolvePath(operation.to))
+      } else if (operation.type === 'chmod') {
+        const resolvedPath = this.resolvePath(operation.path)
+        if (existsSync(resolvedPath)) {
+          withFsErrors(() => fs.chmodSync(resolvedPath, operation.mode))
+        }
+      } else if (operation.type === 'utimes') {
+        const resolvedPath = this.resolvePath(operation.path)
+        if (existsSync(resolvedPath)) {
+          withFsErrors(() =>
+            fs.utimesSync(resolvedPath, operation.atime, operation.mtime),
+          )
+        }
       }
       this.#stats.invalidations += 1
+    }
+  }
+
+  private ensureLocalRuntimeDirectories(): void {
+    for (const dirPath of [
+      '/base',
+      '/global',
+      '/pg_commit_ts',
+      '/pg_dynshmem',
+      '/pg_logical',
+      '/pg_logical/mappings',
+      '/pg_logical/snapshots',
+      '/pg_multixact',
+      '/pg_multixact/members',
+      '/pg_multixact/offsets',
+      '/pg_notify',
+      '/pg_replslot',
+      '/pg_serial',
+      '/pg_snapshots',
+      '/pg_stat',
+      '/pg_stat_tmp',
+      '/pg_subtrans',
+      '/pg_tblspc',
+      '/pg_twophase',
+      '/pg_wal/archive_status',
+      '/pg_wal/summaries',
+      '/pg_xact',
+    ]) {
+      withFsErrors(() =>
+        fs.mkdirSync(this.resolvePath(dirPath), { recursive: true }),
+      )
     }
   }
 
@@ -347,6 +448,57 @@ export class LazyReplicaFS extends BaseFilesystem {
     return this.index.getFileVersion(normalizedPath, this.#appliedLsn)?.fileSize
   }
 
+  private hasRemotePath(filePath: string): boolean {
+    const normalizedPath = normalizePgPath(filePath)
+    return (
+      this.remoteFileSize(normalizedPath) !== undefined ||
+      this.index.listChildNames(normalizedPath, this.#appliedLsn).length > 0
+    )
+  }
+
+  private removeStaleLocalPaths(): void {
+    removeLocalPath(this.resolvePath('/global/pg_control'))
+    for (const filePath of this.#staleFilePaths) {
+      removeLocalPath(this.resolvePath(filePath))
+    }
+    for (const filePath of this.#staleRelationPaths) {
+      removeLocalPath(this.resolvePath(filePath))
+    }
+  }
+
+  private materializeVisibleRemoteState(): void {
+    for (const version of this.index.visibleFileVersions(this.#appliedLsn)) {
+      const bytes = this.resolver.getFileBytes(version)
+      if (!bytes) {
+        throw fsError(ERRNO_CODES.ENOENT, `Missing file ${version.path}`)
+      }
+      const resolvedPath = this.resolvePath(version.path)
+      withFsErrors(() => {
+        fs.mkdirSync(path.dirname(resolvedPath), { recursive: true })
+        fs.writeFileSync(resolvedPath, bytes)
+      })
+      this.#cachedFiles.set(version.path, version.sha256)
+      this.#stats.fileFetches += 1
+    }
+
+    for (const version of this.index.visiblePageVersions(this.#appliedLsn)) {
+      const bytes = this.resolver.getPageBytes(version)
+      if (!bytes) {
+        throw fsError(
+          ERRNO_CODES.ENOENT,
+          `Missing page ${version.path} block ${version.pageNo}`,
+        )
+      }
+      this.ensureSparseFile(version.path, version.fileSize)
+      this.writePageBytes(version.path, version.pageNo, version.pageSize, bytes)
+      this.#cachedPages.set(
+        pageKey(version.path, version.pageNo),
+        version.sha256,
+      )
+      this.#stats.pageFetches += 1
+    }
+  }
+
   private ensureSparseFile(filePath: string, fileSize: number): void {
     const resolvedPath = this.resolvePath(filePath)
     withFsErrors(() => {
@@ -379,11 +531,24 @@ export class LazyReplicaFS extends BaseFilesystem {
   }
 
   private assertLocalWrite(filePath: string): void {
-    if (this.allowLocalWrite(filePath)) return
+    if (this.canWriteLocal(filePath)) return
     throw fsError(
       ERRNO_CODES.EINVAL,
       `Replica filesystem is read-only for durable path ${filePath}`,
     )
+  }
+
+  private canWriteLocal(filePath: string): boolean {
+    return this.#allowRecoveryWrites || this.allowLocalWrite(filePath)
+  }
+
+  private invalidateLocalCache(filePath: string): void {
+    const normalizedPath = normalizePgPath(filePath)
+    this.#cachedFiles.delete(normalizedPath)
+    const pageKeyPrefix = `${normalizedPath}\0`
+    for (const key of this.#cachedPages.keys()) {
+      if (key.startsWith(pageKeyPrefix)) this.#cachedPages.delete(key)
+    }
   }
 
   private fdPath(fd: number): string {
@@ -406,18 +571,7 @@ export class LazyReplicaFS extends BaseFilesystem {
 }
 
 function defaultAllowLocalWrite(filePath: string): boolean {
-  const classified = classifyPgPath(filePath)
-  if (classified.kind === 'temp') return true
-
-  const normalizedPath = classified.normalizedPath
-  return (
-    normalizedPath === '/postmaster.pid' ||
-    normalizedPath === '/postmaster.opts' ||
-    normalizedPath.startsWith('/pg_dynshmem/') ||
-    normalizedPath.startsWith('/pg_notify/') ||
-    normalizedPath.startsWith('/pg_replslot/') ||
-    normalizedPath.endsWith('/pg_internal.init')
-  )
+  return isReplicaLocalPath(filePath)
 }
 
 function pageKey(filePath: string, pageNo: number): string {
@@ -425,7 +579,16 @@ function pageKey(filePath: string, pageNo: number): string {
 }
 
 function isMutatingOpenFlag(flags: string): boolean {
-  return flags.includes('w') || flags.includes('a') || flags.includes('x')
+  return (
+    flags.includes('w') ||
+    flags.includes('a') ||
+    flags.includes('x') ||
+    flags.includes('+')
+  )
+}
+
+function shouldMaterializeBeforeOpen(flags: string): boolean {
+  return !flags.includes('w') && !flags.includes('x')
 }
 
 function removeLocalPath(filePath: string): void {

@@ -159,6 +159,29 @@ export class ReplicaPageIndex {
     return this.getFileVersion(normalizedPath, lsn) !== undefined
   }
 
+  visiblePageVersions(lsn: string | undefined): PageVersion[] {
+    if (!lsn) return []
+    const versions: PageVersion[] = []
+    for (const pageVersions of this.#indexes.pages.values()) {
+      const version = latestAtOrBefore(pageVersions, lsn)
+      if (version && this.isPageVisible(version, lsn)) versions.push(version)
+    }
+    return versions.sort(
+      (left, right) =>
+        left.path.localeCompare(right.path) || left.pageNo - right.pageNo,
+    )
+  }
+
+  visibleFileVersions(lsn: string | undefined): FileVersion[] {
+    if (!lsn) return []
+    const versions: FileVersion[] = []
+    for (const fileVersions of this.#indexes.files.values()) {
+      const version = latestAtOrBefore(fileVersions, lsn)
+      if (version && this.isFileVisible(version, lsn)) versions.push(version)
+    }
+    return versions.sort((left, right) => left.path.localeCompare(right.path))
+  }
+
   private remotePaths(lsn: string | undefined): string[] {
     if (!lsn) return []
     const paths = new Set<string>()

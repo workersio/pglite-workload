@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import { DEFAULT_TABLESPACE_OID, RELSEG_SIZE } from '../src/shared/constants.js'
-import { classifyPgPath, normalizePgPath } from '../src/fs/path-classifier.js'
+import {
+  classifyPgPath,
+  isDurableTimelinePath,
+  normalizePgPath,
+} from '../src/fs/path-classifier.js'
 
 describe('path classifier', () => {
   it('normalizes postgres paths', () => {
@@ -46,5 +50,19 @@ describe('path classifier', () => {
     expect(classifyPgPath('/global/pg_control').kind).toBe('control')
     expect(classifyPgPath('/pg_wal/000000010000000000000001').kind).toBe('wal')
     expect(classifyPgPath('/base/5/pgsql_tmp/pgsql_tmp123').kind).toBe('temp')
+  })
+
+  it('excludes replica-local runtime paths from the durable timeline', () => {
+    expect(isDurableTimelinePath('/postmaster.pid')).toBe(false)
+    expect(isDurableTimelinePath('/postmaster.opts')).toBe(false)
+    expect(isDurableTimelinePath('/pg_dynshmem')).toBe(false)
+    expect(isDurableTimelinePath('/pg_dynshmem/mmap.1')).toBe(false)
+    expect(isDurableTimelinePath('/pg_notify')).toBe(false)
+    expect(isDurableTimelinePath('/pg_notify/0000')).toBe(false)
+    expect(isDurableTimelinePath('/pg_replslot/demo/state')).toBe(false)
+    expect(isDurableTimelinePath('/base/5/pg_internal.init')).toBe(false)
+    expect(isDurableTimelinePath('/base/5/pg_internal.init.42')).toBe(false)
+    expect(isDurableTimelinePath('/base/5/16384')).toBe(true)
+    expect(isDurableTimelinePath('/global/pg_control')).toBe(true)
   })
 })

@@ -4,6 +4,11 @@ export class ReplicaQueryGate {
   #applying: Promise<void> = Promise.resolve()
 
   async runQuery<T>(operation: () => Promise<T>): Promise<T> {
+    for (;;) {
+      const applying = this.#applying
+      await applying
+      if (applying === this.#applying) break
+    }
     this.#activeQueries += 1
     try {
       return await operation()

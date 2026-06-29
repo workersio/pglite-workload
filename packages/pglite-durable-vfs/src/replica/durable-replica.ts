@@ -1,3 +1,5 @@
+import * as path from 'node:path'
+
 import { PGlite } from '@electric-sql/pglite'
 import type {
   PGliteOptions,
@@ -8,9 +10,10 @@ import type {
 
 import { DurableTimeline } from '../durable/timeline-stream.js'
 import { PageServerHttpClient } from '../pageserver/client.js'
-import type { CommitManifest } from '../pageserver/types.js'
+import type { CommitManifest, LogicalStatement } from '../pageserver/types.js'
 import { DiskPageResolver, type PageResolver } from './page-resolver.js'
 import { LazyReplicaFS, type LazyReplicaCacheStats } from './lazy-replica-fs.js'
+import { PGliteNativeInvalidator } from './native-invalidator.js'
 import { ReplicaApplyJournal } from './apply-journal.js'
 import { ReplicaQueryGate } from './query-gate.js'
 import {
@@ -60,8 +63,8 @@ export interface DurableReplicaStatus extends ReplicaTailerStatus {
 }
 
 export class DurableReplica {
-  readonly db: PGlite
-  readonly fs: LazyReplicaFS
+  db: PGlite
+  fs: LazyReplicaFS
   readonly tailer: ReplicaTailer
   readonly queryGate: ReplicaQueryGate
 
@@ -84,6 +87,14 @@ export class DurableReplica {
 
   get appliedLsn(): string | undefined {
     return this.fs.appliedLsn
+  }
+
+  replaceDb(db: PGlite): void {
+    this.db = db
+  }
+
+  replaceFs(fs: LazyReplicaFS): void {
+    this.fs = fs
   }
 
   async query<T>(
@@ -172,26 +183,126 @@ export async function createDurableReplica(
     options.journalDir ?? `${options.dataDir}.durable/replica`,
   )
   const queryGate = new ReplicaQueryGate()
-  const fs = new LazyReplicaFS(options.dataDir, {
-    timelineId: options.timelineId,
-    resolver,
-  })
+  let fsGeneration = 0
+  const createReplicaFs = (previous?: LazyReplicaFS): LazyReplicaFS =>
+    new LazyReplicaFS(replicaCacheRoot(options.dataDir, fsGeneration), {
+      timelineId: options.timelineId,
+      resolver,
+      index: previous?.index,
+      appliedLsn: previous?.appliedLsn,
+    })
+  let fs = createReplicaFs()
+  let db: PGlite | undefined
+  const replicaRef: { current?: DurableReplica } = {}
+  const logicalStatements: LogicalStatement[] = []
+  const nativeInvalidator = new PGliteNativeInvalidator(() => db)
+
+  const openDb = async ({
+    closeExisting,
+    replaceFs,
+  }: {
+    closeExisting: boolean
+    replaceFs?: boolean
+  }) => {
+    if (closeExisting && db && !db.closed) {
+      fs.setRecoveryWrites(true)
+      try {
+        await db.close()
+      } finally {
+        fs.setRecoveryWrites(false)
+      }
+    }
+
+    if (replaceFs) {
+      fsGeneration += 1
+      fs = createReplicaFs(fs)
+      tailer.replaceFs(fs)
+      replicaRef.current?.replaceFs(fs)
+    }
+
+    fs.prepareForRecovery({ resetLocalCache: closeExisting })
+    fs.setRecoveryWrites(true)
+    try {
+      db = await PGlite.create({
+        ...options.pgliteOptions,
+        fs,
+      })
+      replicaRef.current?.replaceDb(db)
+      return db
+    } finally {
+      fs.setRecoveryWrites(false)
+    }
+  }
+
+  const restartAfterApply =
+    options.invalidator === undefined
+      ? async (manifest: CommitManifest) => {
+          if (
+            manifest.replicaApplyMode === 'live-invalidate' &&
+            nativeInvalidator.didHandle(manifest)
+          ) {
+            return
+          }
+          if (manifest.logicalStatements) {
+            logicalStatements.push(...manifest.logicalStatements)
+          }
+          await openDb({ closeExisting: true, replaceFs: true })
+          await replayLogicalStatements(db!, fs, logicalStatements)
+        }
+      : undefined
+
   const tailer = new ReplicaTailer({
     fs,
     timeline,
     pageServer,
     journal,
     queryGate,
-    invalidator: options.invalidator,
-    restartReplica: options.restartReplica,
+    invalidator: options.invalidator ?? nativeInvalidator,
+    afterApply: restartAfterApply,
+    restartReplica:
+      options.restartReplica ??
+      (restartAfterApply ? () => undefined : undefined),
   })
 
-  if (options.autoCatchUp) await tailer.catchUpOnce()
+  if (options.autoCatchUp) {
+    await tailer.catchUpOnce({
+      allowRestartWithoutHook: true,
+      skipAfterApply: true,
+    })
+  }
 
-  const db = await PGlite.create({
-    ...options.pgliteOptions,
-    fs,
-  })
+  db = await openDb({ closeExisting: false })
 
-  return new DurableReplica({ db, fs, tailer, queryGate })
+  const replica = new DurableReplica({ db, fs, tailer, queryGate })
+  replicaRef.current = replica
+  return replica
+}
+
+function replicaCacheRoot(dataDir: string, generation: number): string {
+  if (generation === 0) return dataDir
+  return path.join(`${dataDir}.cache`, `generation-${generation}`)
+}
+
+async function replayLogicalStatements(
+  db: PGlite,
+  fs: LazyReplicaFS,
+  statements: LogicalStatement[],
+): Promise<void> {
+  if (statements.length === 0) return
+  fs.setRecoveryWrites(true)
+  try {
+    for (const statement of statements) {
+      try {
+        await db.query(statement.sql, statement.params)
+      } catch (error) {
+        if (!isDuplicateKeyError(error)) throw error
+      }
+    }
+  } finally {
+    fs.setRecoveryWrites(false)
+  }
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('duplicate key')
 }

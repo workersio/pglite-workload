@@ -47,10 +47,20 @@ export {
 export { ReplicaQueryGate } from './replica/query-gate.js'
 export {
   ReplicaTailer,
+  type ReplicaCatchUpOptions,
   type ReplicaInvalidator,
   type ReplicaTailerOptions,
   type ReplicaTailerStatus,
 } from './replica/tailer.js'
+export {
+  PGliteNativeInvalidator,
+  hasPGliteNativeInvalidation,
+} from './replica/native-invalidator.js'
+export {
+  createDurableVfsDemo,
+  type DurableVfsDemo,
+  type DurableVfsDemoOptions,
+} from './demo/app.js'
 export {
   PageServerHttpClient,
   type PageServerApi,

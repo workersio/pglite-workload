@@ -1,6 +1,7 @@
 import { PAGE_SIZE } from '../shared/constants.js'
 import {
   classifyPgPath,
+  isDurableTimelinePath,
   type ForkName,
   type RelationPath,
 } from './path-classifier.js'
@@ -223,7 +224,9 @@ export class DirtyTracker {
   }
 
   private shouldIgnore(path: string): boolean {
-    return this.ignoreTemporary && classifyPgPath(path).kind === 'temp'
+    const classified = classifyPgPath(path)
+    if (classified.kind === 'temp') return this.ignoreTemporary
+    return !isDurableTimelinePath(path)
   }
 }
 

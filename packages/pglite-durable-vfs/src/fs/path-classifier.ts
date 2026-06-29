@@ -106,7 +106,34 @@ export function classifyPgPath(inputPath: string): ClassifiedPath {
 }
 
 export function isDurableTimelinePath(inputPath: string): boolean {
-  return classifyPgPath(inputPath).kind !== 'temp'
+  return !isReplicaLocalPath(inputPath)
+}
+
+export function isReplicaLocalPath(inputPath: string): boolean {
+  const classified = classifyPgPath(inputPath)
+  if (classified.kind === 'temp') return true
+
+  const normalizedPath = classified.normalizedPath
+  return (
+    normalizedPath === '/postmaster.pid' ||
+    normalizedPath === '/postmaster.opts' ||
+    isPathOrChild(normalizedPath, '/pg_dynshmem') ||
+    isPathOrChild(normalizedPath, '/pg_notify') ||
+    isPathOrChild(normalizedPath, '/pg_replslot') ||
+    isPgInternalInitPath(normalizedPath)
+  )
+}
+
+function isPathOrChild(filePath: string, parentPath: string): boolean {
+  return filePath === parentPath || filePath.startsWith(`${parentPath}/`)
+}
+
+function isPgInternalInitPath(filePath: string): boolean {
+  const fileName = filePath.split('/').at(-1)
+  return (
+    fileName === 'pg_internal.init' ||
+    fileName?.startsWith('pg_internal.init.') === true
+  )
 }
 
 function classifyRelationPath(

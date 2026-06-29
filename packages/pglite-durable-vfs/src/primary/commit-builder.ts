@@ -13,9 +13,11 @@ import type {
   CommitManifest,
   CommitObjectInput,
   CommitOperation,
+  LogicalStatement,
   FileImageOperation,
   PageImageOperation,
   ReplicaApplyMode,
+  TransactionState,
 } from '../pageserver/types.js'
 
 export interface BuildCommitRequestInput {
@@ -26,6 +28,7 @@ export interface BuildCommitRequestInput {
   commitId: string
   createdAt: string
   snapshot: DirtySnapshot
+  logicalStatements?: LogicalStatement[]
 }
 
 export interface BuiltCommitRequest {
@@ -41,9 +44,11 @@ export function buildCommitRequest({
   commitId,
   createdAt,
   snapshot,
+  logicalStatements,
 }: BuildCommitRequestInput): BuiltCommitRequest {
   const objects = new Map<string, CommitObjectInput>()
   const operations: CommitOperation[] = []
+  let transactionState: TransactionState | undefined
 
   for (const page of snapshot.pages) {
     const operation = pageOperation(rootDir, page, snapshot.invalidations)
@@ -57,6 +62,7 @@ export function buildCommitRequest({
     if (!operation) continue
     operations.push(operation.operation)
     objects.set(operation.object.sha256!, operation.object)
+    transactionState ??= operation.transactionState
   }
 
   operations.push(...snapshot.metadata.map(copyMetadataOperation))
@@ -69,9 +75,14 @@ export function buildCommitRequest({
     previousLsn,
     commitId,
     createdAt,
+    transactionState,
     replicaApplyMode: replicaApplyMode(operations),
     operations,
     invalidations: snapshot.invalidations,
+    logicalStatements:
+      logicalStatements && logicalStatements.length > 0
+        ? logicalStatements
+        : undefined,
     stats,
   }
 
@@ -115,7 +126,13 @@ function pageOperation(
 function fileOperation(
   rootDir: string,
   filePath: string,
-): { operation: FileImageOperation; object: CommitObjectInput } | undefined {
+):
+  | {
+      operation: FileImageOperation
+      object: CommitObjectInput
+      transactionState?: TransactionState
+    }
+  | undefined {
   const normalizedPath = normalizePgPath(filePath)
   const absolutePath = resolvePgPath(rootDir, normalizedPath)
   if (!fs.existsSync(absolutePath)) return undefined
@@ -130,7 +147,35 @@ function fileOperation(
       byteLength: bytes.byteLength,
     },
     object,
+    transactionState:
+      normalizedPath === '/global/pg_control'
+        ? transactionStateFromControlFile(bytes)
+        : undefined,
   }
+}
+
+const pgControlNextFullXidOffset = 64
+const fullTransactionIdByteLength = 8
+
+function transactionStateFromControlFile(
+  bytes: Uint8Array,
+): TransactionState | undefined {
+  if (
+    bytes.byteLength <
+    pgControlNextFullXidOffset + fullTransactionIdByteLength
+  ) {
+    return undefined
+  }
+
+  /*
+   * ControlFileData.checkPointCopy.nextXid is byte offset 64 for the bundled
+   * PostgreSQL pg_control layout. Keeping this parser in TS avoids adding a
+   * primary-side native API just to publish the snapshot horizon.
+   */
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const nextFullXid = view.getBigUint64(pgControlNextFullXidOffset, true)
+  if (nextFullXid === 0n) return undefined
+  return { nextFullXid: nextFullXid.toString() }
 }
 
 function objectInput(bytes: Uint8Array): CommitObjectInput {
@@ -222,6 +267,7 @@ function commitStats(
 function replicaApplyMode(operations: CommitOperation[]): ReplicaApplyMode {
   for (const operation of operations) {
     if (operation.type !== 'page' && operation.type !== 'file') {
+      if (isLiveSafeMetadata(operation)) continue
       return 'restart-replica'
     }
     if (operation.type === 'file' && !isLiveSafeFile(operation.path)) {
@@ -233,5 +279,36 @@ function replicaApplyMode(operations: CommitOperation[]): ReplicaApplyMode {
 
 function isLiveSafeFile(filePath: string): boolean {
   const classified = classifyPgPath(filePath)
-  return classified.kind === 'wal' || classified.kind === 'control'
+  return (
+    classified.kind === 'wal' ||
+    classified.kind === 'control' ||
+    isTransactionStatusPath(classified.normalizedPath)
+  )
+}
+
+function isLiveSafeMetadata(operation: MetadataOperation): boolean {
+  if (operation.type !== 'rename') return false
+  return (
+    isReplOriginCheckpointPath(operation.from) &&
+    isReplOriginCheckpointPath(operation.to)
+  )
+}
+
+function isTransactionStatusPath(filePath: string): boolean {
+  return (
+    isPathOrChild(filePath, '/pg_xact') ||
+    isPathOrChild(filePath, '/pg_subtrans') ||
+    isPathOrChild(filePath, '/pg_multixact')
+  )
+}
+
+function isReplOriginCheckpointPath(filePath: string): boolean {
+  return (
+    filePath === '/pg_logical/replorigin_checkpoint' ||
+    filePath === '/pg_logical/replorigin_checkpoint.tmp'
+  )
+}
+
+function isPathOrChild(filePath: string, parentPath: string): boolean {
+  return filePath === parentPath || filePath.startsWith(`${parentPath}/`)
 }

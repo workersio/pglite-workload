@@ -17,10 +17,21 @@ export interface CommitManifest {
   createdAt: string
   pgWalLsn?: string
   durableStreamOffset?: string
+  transactionState?: TransactionState
   replicaApplyMode: ReplicaApplyMode
   operations: CommitOperation[]
   invalidations: InvalidationEntry[]
+  logicalStatements?: LogicalStatement[]
   stats: CommitStats
+}
+
+export interface TransactionState {
+  nextFullXid: string
+}
+
+export interface LogicalStatement {
+  sql: string
+  params?: unknown[]
 }
 
 export type CommitOperation =

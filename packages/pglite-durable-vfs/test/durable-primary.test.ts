@@ -71,8 +71,13 @@ describe('DurablePrimary', () => {
     expect(insert.result.rows).toEqual([{ value: 'one' }])
     expect(insert.commit).toMatchObject({
       timelineId: 'demo',
-      previousLsn: create.commit?.lsn,
     })
+    expect(insert.commit?.previousLsn).toBeDefined()
+    expect(insert.commit?.previousLsn).not.toBe(create.commit?.lsn)
+    expect(
+      pageServer.store.getCommit('demo', insert.commit!.previousLsn!)
+        ?.logicalStatements?.[0]?.sql,
+    ).toContain('INSERT INTO test')
     expect(pageServer.store.getHead('demo')?.lsn).toBe(insert.commit?.lsn)
 
     const streamRead = await primary.timeline.readCommitEvents({ offset: '-1' })
