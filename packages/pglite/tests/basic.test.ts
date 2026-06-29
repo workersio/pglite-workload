@@ -676,6 +676,19 @@ await testEsmCjsAndDTC(async (importType) => {
       expect(db.Module.HEAPU8.buffer).toBe(memory.buffer)
     })
 
+    it('shared wasmMemory requires a shared wasm module', async () => {
+      await db.close()
+      const memory = new WebAssembly.Memory({
+        initial: 2048,
+        maximum: 2048,
+        shared: true,
+      } as WebAssembly.MemoryDescriptor & { shared: true })
+
+      await expect(PGlite.create({ wasmMemory: memory })).rejects.toThrow(
+        'Shared wasmMemory requires an explicit shared-memory pgliteWasmModule',
+      )
+    })
+
     // this tests the parameter 'max_parallel_workers_per_gather=0',
     it('it shouldnt use parallel workers on gather', async () => {
       const ROWS = 400_000

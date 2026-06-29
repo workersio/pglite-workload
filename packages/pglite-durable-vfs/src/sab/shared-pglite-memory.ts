@@ -1,15 +1,26 @@
+import { readFile } from 'node:fs/promises'
+
+import type { PGliteOptions } from '@electric-sql/pglite'
+
 export interface SharedPGliteMemoryOptions {
   initialBytes?: number
   maximumBytes?: number
 }
 
 const WASM_PAGE_BYTES = 64 * 1024
-const DEFAULT_INITIAL_BYTES = 128 * 1024 * 1024
-const DEFAULT_MAXIMUM_BYTES = 2 * 1024 * 1024 * 1024
+export const DEFAULT_SHARED_PGLITE_MEMORY_BYTES = 128 * 1024 * 1024
+
+export interface SharedPGliteRuntimeOptions extends SharedPGliteMemoryOptions {
+  wasmPath: string | URL
+}
+
+export type SharedPGliteRuntime = Required<
+  Pick<PGliteOptions, 'pgliteWasmModule' | 'wasmMemory'>
+>
 
 export function createSharedPGliteMemory({
-  initialBytes = DEFAULT_INITIAL_BYTES,
-  maximumBytes = DEFAULT_MAXIMUM_BYTES,
+  initialBytes = DEFAULT_SHARED_PGLITE_MEMORY_BYTES,
+  maximumBytes = initialBytes,
 }: SharedPGliteMemoryOptions = {}): WebAssembly.Memory {
   const initial = wasmPageCount(initialBytes, 'initialBytes')
   const maximum = wasmPageCount(maximumBytes, 'maximumBytes')
@@ -24,6 +35,18 @@ export function createSharedPGliteMemory({
     maximum,
     shared: true,
   } as WebAssembly.MemoryDescriptor & { shared: true })
+}
+
+export async function loadSharedPGliteRuntimeOptions({
+  wasmPath,
+  initialBytes,
+  maximumBytes,
+}: SharedPGliteRuntimeOptions): Promise<SharedPGliteRuntime> {
+  const bytes = await readFile(wasmPath)
+  return {
+    pgliteWasmModule: await WebAssembly.compile(bytes),
+    wasmMemory: createSharedPGliteMemory({ initialBytes, maximumBytes }),
+  }
 }
 
 function wasmPageCount(bytes: number, name: string): number {

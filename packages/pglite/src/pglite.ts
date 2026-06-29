@@ -349,6 +349,11 @@ export class PGlite
           : 2048,
         maximum: 32768,
       })
+    if (isSharedWasmMemory(wasmMemory) && !options.pgliteWasmModule) {
+      throw new Error(
+        'Shared wasmMemory requires an explicit shared-memory pgliteWasmModule. Build pglite-shared.wasm with PGLITE_BUILD_SHARED_MEMORY=true and pass it as pgliteWasmModule.',
+      )
+    }
 
     let emscriptenOpts: Partial<PostgresMod> = {
       thisProgram: POSTGRES_EXE_PATH,
@@ -1350,4 +1355,11 @@ export class PGlite
   copyToFS(filePath: string, data: Uint8Array, mode?: number) {
     copyToFS(this.mod!.FS, filePath, data, mode)
   }
+}
+
+function isSharedWasmMemory(memory: WebAssembly.Memory): boolean {
+  return (
+    typeof SharedArrayBuffer !== 'undefined' &&
+    memory.buffer instanceof SharedArrayBuffer
+  )
 }

@@ -2321,9 +2321,17 @@ Replica startup local-write smoke test:
 
 ### Phase 8: SAB-backed remote page loading
 
-- Add a Node-only PGlite WASM build variant with imported shared memory.
+- Add a Node-only PGlite WASM build variant with imported shared memory. The
+  demo build path is `pnpm wasm:build:shared`, which performs a full
+  atomics-enabled core Postgres/PGlite build and copies `pglite-shared.js`,
+  `pglite-shared.wasm`, and `pglite-shared.data` into
+  `packages/pglite/release/`. The first demo build intentionally omits
+  optional prebuilt dependency archives and bundled extensions because those
+  libraries are not atomics-compatible yet.
 - Create shared WASM memory with `{ shared: true, initial, maximum }`.
-- Prefer fixed memory for the first prototype.
+- Prefer fixed memory for the first prototype. The shared build defaults to a
+  128 MiB fixed heap via `PGLITE_SHARED_MEMORY_SIZE=128MB`; the TS helper
+  defaults to the same fixed-size `SharedArrayBuffer`.
 - Run PGlite compute inside a Node `Worker`.
 - Implement `sab-control-block.ts` for request/response state and
   `Atomics.wait` / `Atomics.notify`.
