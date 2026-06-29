@@ -1,5 +1,19 @@
 export { TrackingNodeFS } from './fs/tracking-node-fs.js'
 export {
+  DurableTimeline,
+  commitEventFromManifest,
+  type AppendCommitEventResult,
+  type CommitEvent,
+  type ProducerJournalState,
+  type ReadCommitEventsResult,
+} from './durable/timeline-stream.js'
+export {
+  DurableStreamTestServer,
+  startDurableStreamTestServer,
+  type StartedDurableStreamServer,
+  type TestServerOptions,
+} from './durable/durable-server.js'
+export {
   DirtyTracker,
   type DirtyFile,
   type DirtyPage,
