@@ -14,9 +14,14 @@ import {
 import type { CommitManifest } from '../pageserver/types.js'
 import { ReplicaPageIndex } from '../replica/page-index.js'
 import {
+  closePageResolver,
   DiskPageResolver,
   type PageResolver,
 } from '../replica/page-resolver.js'
+import {
+  SabPageResolver,
+  type SabPageResolverOptions,
+} from '../sab/sab-page-resolver.js'
 import { DurablePrimaryFS } from './durable-primary-fs.js'
 import { LazyPrimaryFS } from './lazy-primary-fs.js'
 import { getPGliteWalInsertLsn } from './native-wal-lsn.js'
@@ -37,6 +42,7 @@ export interface DurablePrimaryOptions {
   journalDir?: string
   pageResolver?: PageResolver
   pageServerRootDir?: string
+  sabPageResolverOptions?: Omit<SabPageResolverOptions, 'pageServerUrl'>
   writeLease?: DurablePrimaryWriteLease
   pgliteOptions?: Omit<PGliteOptions, 'dataDir' | 'fs'>
 }
@@ -140,8 +146,10 @@ export class DurablePrimary {
   }
 
   async close(): Promise<void> {
-    if (this.db.closed) return
-    await this.db.close()
+    if (!this.db.closed) await this.db.close()
+    if (this.fs instanceof LazyPrimaryFS) {
+      await closePageResolver(this.fs.resolver)
+    }
   }
 
   status(): DurablePrimaryStatus {
@@ -252,12 +260,10 @@ async function createLazyPrimaryFs(
     options.pageResolver ??
     (options.pageServerRootDir
       ? new DiskPageResolver(options.pageServerRootDir)
-      : undefined)
-  if (!resolver) {
-    throw new Error(
-      'createDurablePrimary({ fsMode: "lazy" }) requires pageResolver or pageServerRootDir for synchronous lazy reads',
-    )
-  }
+      : new SabPageResolver({
+          pageServerUrl: options.pageServerUrl,
+          ...options.sabPageResolverOptions,
+        }))
 
   const index = new ReplicaPageIndex(options.timelineId)
   const manifests = await readManifestChain(

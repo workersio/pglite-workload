@@ -6,6 +6,15 @@ export interface PageResolver {
   getFileBytes(version: FileVersion): Uint8Array | undefined
 }
 
+export async function closePageResolver(resolver: PageResolver): Promise<void> {
+  const closeable = resolver as PageResolver & {
+    close?: unknown
+  }
+  if (typeof closeable.close === 'function') {
+    await closeable.close()
+  }
+}
+
 export class DiskPageResolver implements PageResolver {
   readonly store: DiskCommitStore
 

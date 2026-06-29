@@ -1,4 +1,7 @@
 import { Worker } from 'node:worker_threads'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -28,6 +31,51 @@ describe('SAB page resolver', () => {
 
     expect(resolvedBytes?.byteLength).toBe(PAGE_SIZE)
     expect(resolvedBytes?.[0]).toBe(7)
+  })
+
+  it('copies a missing page directly into a shared target memory', async () => {
+    const bytes = new Uint8Array(PAGE_SIZE).fill(9)
+    const page = pageVersion('sab-copy-demo', '0/00000010', bytes)
+    const memory = new WebAssembly.Memory({
+      initial: 1,
+      maximum: 1,
+      shared: true,
+    } as WebAssembly.MemoryDescriptor & { shared: true })
+    staticServer = await startStaticPageServer([routeForPage(page, bytes)])
+    resolver = new SabPageResolver({
+      pageServerUrl: staticServer.baseUrl,
+      targetMemory: memory,
+    })
+
+    expect(resolver.copyPageBytes(page, 32)).toBe(true)
+
+    const copied = new Uint8Array(memory.buffer, 32, PAGE_SIZE)
+    expect(copied[0]).toBe(9)
+    expect(copied[PAGE_SIZE - 1]).toBe(9)
+  })
+
+  it('persists fetched objects to an optional local cache', async () => {
+    const bytes = new Uint8Array(PAGE_SIZE).fill(2)
+    const page = pageVersion('sab-cache-demo', '0/00000010', bytes)
+    const cacheDir = await mkdtemp(join(tmpdir(), 'pglite-sab-cache-'))
+    staticServer = await startStaticPageServer([routeForPage(page, bytes)])
+    resolver = new SabPageResolver({
+      pageServerUrl: staticServer.baseUrl,
+      cacheDir,
+    })
+    expect(resolver.getPageBytes(page)?.[0]).toBe(2)
+    await resolver.close()
+    resolver = undefined
+    await staticServer.close()
+    staticServer = undefined
+
+    resolver = new SabPageResolver({
+      pageServerUrl: 'http://127.0.0.1:1',
+      cacheDir,
+    })
+
+    expect(resolver.getPageBytes(page)?.[0]).toBe(2)
+    await rm(cacheDir, { recursive: true, force: true })
   })
 
   it('returns undefined for a missing remote page', async () => {
@@ -64,6 +112,20 @@ describe('SAB page resolver', () => {
         sha256: sha256Bytes(new Uint8Array(PAGE_SIZE).fill(5)),
       }),
     ).toThrow('Hash mismatch')
+  })
+
+  it('rejects responses larger than the shared transfer buffer', async () => {
+    const bytes = new Uint8Array(PAGE_SIZE).fill(6)
+    const page = pageVersion('too-large-demo', '0/00000010', bytes)
+    staticServer = await startStaticPageServer([routeForPage(page, bytes)])
+    resolver = new SabPageResolver({
+      pageServerUrl: staticServer.baseUrl,
+      maxBytes: 16,
+    })
+
+    expect(() => resolver?.getPageBytes(page)).toThrow(
+      'larger than the shared buffer',
+    )
   })
 
   it('times out and can be recreated for a later request', async () => {

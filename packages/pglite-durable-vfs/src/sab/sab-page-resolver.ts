@@ -25,11 +25,13 @@ export interface SabPageResolverOptions {
   pageServerUrl: string
   maxBytes?: number
   timeoutMs?: number
+  cacheDir?: string
+  targetMemory?: WebAssembly.Memory
 }
 
 type ResolverRequest =
-  | { kind: 'page'; version: PageVersion }
-  | { kind: 'file'; version: FileVersion }
+  | { kind: 'page'; version: PageVersion; targetOffset?: number }
+  | { kind: 'file'; version: FileVersion; targetOffset?: number }
 
 const DEFAULT_MAX_BYTES = 16 * 1024 * 1024
 const DEFAULT_TIMEOUT_MS = 5000
@@ -38,9 +40,11 @@ export class SabPageResolver implements PageResolver {
   readonly pageServerUrl: string
   readonly maxBytes: number
   readonly timeoutMs: number
+  readonly cacheDir?: string
 
   #block: SabControlBlock
   #worker: Worker
+  #targetBuffer?: SharedArrayBuffer
   #requestId = 0
   #busy = false
   #closed = false
@@ -49,11 +53,15 @@ export class SabPageResolver implements PageResolver {
     pageServerUrl,
     maxBytes = DEFAULT_MAX_BYTES,
     timeoutMs = DEFAULT_TIMEOUT_MS,
+    cacheDir,
+    targetMemory,
   }: SabPageResolverOptions) {
     this.pageServerUrl = pageServerUrl
     this.maxBytes = maxBytes
     this.timeoutMs = timeoutMs
+    this.cacheDir = cacheDir
     this.#block = createSabControlBlock(maxBytes)
+    this.#targetBuffer = targetBufferFromMemory(targetMemory)
     this.#worker = this.createWorker()
   }
 
@@ -63,6 +71,14 @@ export class SabPageResolver implements PageResolver {
 
   getFileBytes(version: FileVersion): Uint8Array | undefined {
     return this.requestBytes({ kind: 'file', version })
+  }
+
+  copyPageBytes(version: PageVersion, targetOffset: number): boolean {
+    return this.copyBytes({ kind: 'page', version, targetOffset })
+  }
+
+  copyFileBytes(version: FileVersion, targetOffset: number): boolean {
+    return this.copyBytes({ kind: 'file', version, targetOffset })
   }
 
   restartWorker(): void {
@@ -77,8 +93,27 @@ export class SabPageResolver implements PageResolver {
   }
 
   private requestBytes(request: ResolverRequest): Uint8Array | undefined {
+    const result = this.dispatchRequest(request)
+    return result === true ? undefined : result
+  }
+
+  private copyBytes(request: ResolverRequest): boolean {
+    if (!this.#targetBuffer) {
+      throw new Error(
+        'SAB page resolver direct copy requires a shared targetMemory',
+      )
+    }
+    return this.dispatchRequest(request) === true
+  }
+
+  private dispatchRequest(
+    request: ResolverRequest,
+  ): Uint8Array | true | undefined {
     if (this.#closed) throw new Error('SAB page resolver is closed')
     if (this.#busy) throw new Error('SAB page resolver request already active')
+    if (request.targetOffset !== undefined) {
+      assertTargetOffset(request.targetOffset)
+    }
     this.#busy = true
     const requestId = (this.#requestId += 1)
     const control = this.#block.control
@@ -113,6 +148,7 @@ export class SabPageResolver implements PageResolver {
       Atomics.store(control, SAB_STATE_INDEX, 0)
 
       if (state === SAB_STATE_DONE && status === SAB_STATUS_OK) {
+        if (request.targetOffset !== undefined) return true
         return new Uint8Array(this.#block.data.slice(0, byteLength))
       }
       if (state !== SAB_STATE_ERROR) {
@@ -131,6 +167,8 @@ export class SabPageResolver implements PageResolver {
       workerData: {
         controlBuffer: this.#block.controlBuffer,
         dataBuffer: this.#block.dataBuffer,
+        targetBuffer: this.#targetBuffer,
+        cacheDir: this.cacheDir,
         pageServerUrl: this.pageServerUrl,
       },
     })
@@ -157,5 +195,24 @@ function errorMessage(
       return `Failed to fetch ${target}`
     default:
       return `SAB resolver failed for ${target} with status ${status}`
+  }
+}
+
+function targetBufferFromMemory(
+  memory: WebAssembly.Memory | undefined,
+): SharedArrayBuffer | undefined {
+  if (!memory) return undefined
+  if (
+    typeof SharedArrayBuffer === 'undefined' ||
+    !(memory.buffer instanceof SharedArrayBuffer)
+  ) {
+    throw new Error('SAB page resolver targetMemory must be shared')
+  }
+  return memory.buffer
+}
+
+function assertTargetOffset(targetOffset: number): void {
+  if (!Number.isSafeInteger(targetOffset) || targetOffset < 0) {
+    throw new Error('targetOffset must be a non-negative safe integer')
   }
 }

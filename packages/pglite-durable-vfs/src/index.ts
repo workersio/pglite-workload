@@ -42,6 +42,7 @@ export {
 export { ReplicaPageIndex } from './replica/page-index.js'
 export {
   CountingPageResolver,
+  closePageResolver,
   DiskPageResolver,
   type PageResolver,
 } from './replica/page-resolver.js'
@@ -66,6 +67,13 @@ export {
   SabPageResolver,
   type SabPageResolverOptions,
 } from './sab/sab-page-resolver.js'
+export {
+  NODE_PGLITE_WORKER_SOURCE,
+  NodePGliteWorker,
+  type NodePGliteWorkerOptions,
+  type NodePGliteWorkerPGliteOptions,
+  type NodePGliteWorkerStatus,
+} from './sab/node-pglite-worker.js'
 export {
   createSabControlBlock,
   type SabControlBlock,

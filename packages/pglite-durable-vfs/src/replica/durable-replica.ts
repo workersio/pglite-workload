@@ -11,11 +11,19 @@ import type {
 import { DurableTimeline } from '../durable/timeline-stream.js'
 import { PageServerHttpClient } from '../pageserver/client.js'
 import type { CommitManifest, LogicalStatement } from '../pageserver/types.js'
-import { DiskPageResolver, type PageResolver } from './page-resolver.js'
+import {
+  closePageResolver,
+  DiskPageResolver,
+  type PageResolver,
+} from './page-resolver.js'
 import { LazyReplicaFS, type LazyReplicaCacheStats } from './lazy-replica-fs.js'
 import { PGliteNativeInvalidator } from './native-invalidator.js'
 import { ReplicaApplyJournal } from './apply-journal.js'
 import { ReplicaQueryGate } from './query-gate.js'
+import {
+  SabPageResolver,
+  type SabPageResolverOptions,
+} from '../sab/sab-page-resolver.js'
 import {
   ReplicaTailer,
   type ReplicaInvalidator,
@@ -29,6 +37,7 @@ export interface DurableReplicaOptions {
   streamUrl: string
   pageResolver?: PageResolver
   pageServerRootDir?: string
+  sabPageResolverOptions?: Omit<SabPageResolverOptions, 'pageServerUrl'>
   fetch?: typeof fetch
   journalDir?: string
   producerId?: string
@@ -147,6 +156,7 @@ export class DurableReplica {
   async close(): Promise<void> {
     this.tailer.stop()
     if (!this.db.closed) await this.db.close()
+    await closePageResolver(this.fs.resolver)
   }
 
   status(): DurableReplicaStatus {
@@ -168,12 +178,10 @@ export async function createDurableReplica(
     options.pageResolver ??
     (options.pageServerRootDir
       ? new DiskPageResolver(options.pageServerRootDir)
-      : undefined)
-  if (!resolver) {
-    throw new Error(
-      'createDurableReplica requires pageResolver or pageServerRootDir for synchronous lazy reads',
-    )
-  }
+      : new SabPageResolver({
+          pageServerUrl: options.pageServerUrl,
+          ...options.sabPageResolverOptions,
+        }))
 
   const timeline = await DurableTimeline.create({
     streamUrl: options.streamUrl,

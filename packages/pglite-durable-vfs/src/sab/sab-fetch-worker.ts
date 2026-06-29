@@ -1,5 +1,7 @@
 export const SAB_FETCH_WORKER_SOURCE = String.raw`
 const { createHash } = require('node:crypto')
+const fs = require('node:fs')
+const path = require('node:path')
 const { parentPort, workerData } = require('node:worker_threads')
 
 const STATE_INDEX = 0
@@ -19,6 +21,10 @@ const STATUS_FETCH_ERROR = 5
 
 const control = new Int32Array(workerData.controlBuffer)
 const data = new Uint8Array(workerData.dataBuffer)
+const target = workerData.targetBuffer
+  ? new Uint8Array(workerData.targetBuffer)
+  : undefined
+const cacheDir = workerData.cacheDir
 const pageServerUrl = workerData.pageServerUrl.replace(/\/+$/, '')
 
 parentPort.on('message', (request) => {
@@ -40,6 +46,18 @@ async function handleRequest(request) {
       finish(request.requestId, STATE_ERROR, STATUS_HASH_MISMATCH, bytes.byteLength)
       return
     }
+    if (cacheDir) {
+      persistCacheBytes(request.version.sha256, bytes)
+    }
+    if (request.targetOffset !== undefined) {
+      if (!target || request.targetOffset + bytes.byteLength > target.byteLength) {
+        finish(request.requestId, STATE_ERROR, STATUS_TOO_LARGE, bytes.byteLength)
+        return
+      }
+      target.set(bytes, request.targetOffset)
+      finish(request.requestId, STATE_DONE, STATUS_OK, bytes.byteLength)
+      return
+    }
     if (bytes.byteLength > data.byteLength) {
       finish(request.requestId, STATE_ERROR, STATUS_TOO_LARGE, bytes.byteLength)
       return
@@ -52,10 +70,30 @@ async function handleRequest(request) {
 }
 
 async function fetchBytes(request) {
+  const cached = readCacheBytes(request.version.sha256)
+  if (cached) return cached
+
   const response = await fetch(urlForRequest(request))
   if (response.status === 404) return undefined
   if (!response.ok) throw new Error('Page server request failed')
   return new Uint8Array(await response.arrayBuffer())
+}
+
+function readCacheBytes(sha256) {
+  if (!cacheDir) return undefined
+  const cachePath = cachePathFor(sha256)
+  if (!fs.existsSync(cachePath)) return undefined
+  return new Uint8Array(fs.readFileSync(cachePath))
+}
+
+function persistCacheBytes(sha256, bytes) {
+  const cachePath = cachePathFor(sha256)
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true })
+  fs.writeFileSync(cachePath, bytes)
+}
+
+function cachePathFor(sha256) {
+  return path.join(cacheDir, sha256.slice(0, 2), sha256)
 }
 
 function urlForRequest(request) {
