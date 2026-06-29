@@ -89,6 +89,28 @@ export class LazyReplicaFS extends BaseFilesystem {
 
   applyManifest(manifest: CommitManifest): void {
     this.invalidateManifest(manifest)
+    this.applyManifestIndex(manifest)
+  }
+
+  resetLocalCache({
+    materializeVisibleRemoteState = true,
+  }: { materializeVisibleRemoteState?: boolean } = {}): void {
+    if (this.#fdPaths.size > 0) {
+      throw fsError(ERRNO_CODES.EINVAL, 'Cannot reset cache with open files')
+    }
+    removeLocalPath(this.rootDir)
+    mkdirSync(this.rootDir, { recursive: true })
+    this.#cachedFiles.clear()
+    this.#cachedPages.clear()
+    this.#staleFilePaths.clear()
+    this.#staleRelationPaths.clear()
+    this.ensureLocalRuntimeDirectories()
+    if (materializeVisibleRemoteState) {
+      this.materializeVisibleRemoteState()
+    }
+  }
+
+  protected applyManifestIndex(manifest: CommitManifest): void {
     this.index.applyManifest(manifest)
     this.#appliedLsn = manifest.lsn
   }
@@ -101,13 +123,7 @@ export class LazyReplicaFS extends BaseFilesystem {
     resetLocalCache = false,
   }: { resetLocalCache?: boolean } = {}): void {
     if (resetLocalCache) {
-      this.#cachedFiles.clear()
-      this.#cachedPages.clear()
-      this.removeStaleLocalPaths()
-      this.#staleFilePaths.clear()
-      this.#staleRelationPaths.clear()
-      this.materializeVisibleRemoteState()
-      this.ensureLocalRuntimeDirectories()
+      this.resetLocalCache()
       return
     }
 
@@ -370,7 +386,7 @@ export class LazyReplicaFS extends BaseFilesystem {
     this.ensureSparseFile(normalizedPath, fileSize)
   }
 
-  private ensureReadRange(
+  protected ensureReadRange(
     filePath: string,
     position: number,
     length: number,
@@ -439,7 +455,7 @@ export class LazyReplicaFS extends BaseFilesystem {
     }
   }
 
-  private remoteFileSize(filePath: string): number | undefined {
+  protected remoteFileSize(filePath: string): number | undefined {
     const normalizedPath = normalizePgPath(filePath)
     const classified = classifyPgPath(normalizedPath)
     if (classified.kind === 'relation') {
@@ -454,16 +470,6 @@ export class LazyReplicaFS extends BaseFilesystem {
       this.remoteFileSize(normalizedPath) !== undefined ||
       this.index.listChildNames(normalizedPath, this.#appliedLsn).length > 0
     )
-  }
-
-  private removeStaleLocalPaths(): void {
-    removeLocalPath(this.resolvePath('/global/pg_control'))
-    for (const filePath of this.#staleFilePaths) {
-      removeLocalPath(this.resolvePath(filePath))
-    }
-    for (const filePath of this.#staleRelationPaths) {
-      removeLocalPath(this.resolvePath(filePath))
-    }
   }
 
   private materializeVisibleRemoteState(): void {
@@ -559,7 +565,7 @@ export class LazyReplicaFS extends BaseFilesystem {
     return filePath
   }
 
-  private resolvePath(filePath: string): string {
+  protected resolvePath(filePath: string): string {
     const normalizedPath = normalizePgPath(filePath)
     const relativePath = normalizedPath.slice(1)
     const resolvedPath = path.resolve(this.rootDir, relativePath)

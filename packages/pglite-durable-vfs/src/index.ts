@@ -13,9 +13,14 @@ export {
   DurablePrimaryFS,
   type CommitSummary,
   type CompletedPrimaryCommit,
+  type DurablePrimaryWriteLease,
   type DurablePrimaryFSOptions,
   type PendingPrimaryCommit,
 } from './primary/durable-primary-fs.js'
+export {
+  LazyPrimaryFS,
+  type LazyPrimaryFSOptions,
+} from './primary/lazy-primary-fs.js'
 export { createPrimaryApp } from './primary/app.js'
 export {
   DurableReplica,

@@ -11,7 +11,16 @@ import {
   PageServerHttpClient,
   type PageServerApi,
 } from '../pageserver/client.js'
-import { DurablePrimaryFS, type CommitSummary } from './durable-primary-fs.js'
+import type { CommitManifest } from '../pageserver/types.js'
+import { ReplicaPageIndex } from '../replica/page-index.js'
+import {
+  DiskPageResolver,
+  type PageResolver,
+} from '../replica/page-resolver.js'
+import { DurablePrimaryFS } from './durable-primary-fs.js'
+import { LazyPrimaryFS } from './lazy-primary-fs.js'
+import type { DurablePrimaryWriteLease } from './primary-committer.js'
+import type { CommitSummary, DurablePrimaryStorage } from './primary-storage.js'
 
 export type DurablePrimaryFsMode = 'tracking' | 'lazy'
 
@@ -25,6 +34,9 @@ export interface DurablePrimaryOptions {
   producerId?: string
   fetch?: typeof fetch
   journalDir?: string
+  pageResolver?: PageResolver
+  pageServerRootDir?: string
+  writeLease?: DurablePrimaryWriteLease
   pgliteOptions?: Omit<PGliteOptions, 'dataDir' | 'fs'>
 }
 
@@ -46,7 +58,7 @@ export interface DurableTransactionResult<T> {
 export class DurablePrimary {
   db: PGlite
 
-  readonly fs: DurablePrimaryFS
+  readonly fs: DurablePrimaryStorage
 
   readonly pageServer: PageServerApi
 
@@ -65,7 +77,7 @@ export class DurablePrimary {
     restartAfterCommit = true,
   }: {
     db: PGlite
-    fs: DurablePrimaryFS
+    fs: DurablePrimaryStorage
     pageServer: PageServerApi
     timeline: DurableTimeline
     pgliteOptions?: Omit<PGliteOptions, 'dataDir' | 'fs'>
@@ -193,12 +205,6 @@ export interface DurablePrimaryStatus {
 export async function createDurablePrimary(
   options: DurablePrimaryOptions,
 ): Promise<DurablePrimary> {
-  if (options.fsMode === 'lazy') {
-    throw new Error(
-      'Lazy primary filesystem mode is reserved but not implemented',
-    )
-  }
-
   const pageServer = new PageServerHttpClient({
     baseUrl: options.pageServerUrl,
     fetch: options.fetch,
@@ -208,13 +214,17 @@ export async function createDurablePrimary(
     streamUrl: options.streamUrl,
     producerId: options.producerId ?? `pglite-primary-${options.timelineId}`,
   })
-  const fs = new DurablePrimaryFS(options.dataDir, {
-    timelineId: options.timelineId,
-    pageServer,
-    timeline,
-    head,
-    journalDir: options.journalDir,
-  })
+  const fs =
+    options.fsMode === 'lazy'
+      ? await createLazyPrimaryFs(options, pageServer, timeline, head)
+      : new DurablePrimaryFS(options.dataDir, {
+          timelineId: options.timelineId,
+          pageServer,
+          timeline,
+          head,
+          journalDir: options.journalDir,
+          writeLease: options.writeLease,
+        })
   const db = await PGlite.create({
     ...options.pgliteOptions,
     fs,
@@ -228,4 +238,62 @@ export async function createDurablePrimary(
     pgliteOptions: options.pgliteOptions,
     restartAfterCommit: options.restartAfterCommit,
   })
+}
+
+async function createLazyPrimaryFs(
+  options: DurablePrimaryOptions,
+  pageServer: PageServerApi,
+  timeline: DurableTimeline,
+  head: { timelineId: string; lsn?: string },
+): Promise<LazyPrimaryFS> {
+  const resolver =
+    options.pageResolver ??
+    (options.pageServerRootDir
+      ? new DiskPageResolver(options.pageServerRootDir)
+      : undefined)
+  if (!resolver) {
+    throw new Error(
+      'createDurablePrimary({ fsMode: "lazy" }) requires pageResolver or pageServerRootDir for synchronous lazy reads',
+    )
+  }
+
+  const index = new ReplicaPageIndex(options.timelineId)
+  const manifests = await readManifestChain(
+    pageServer,
+    options.timelineId,
+    head.lsn,
+  )
+  for (const manifest of manifests) {
+    index.applyManifest(manifest)
+  }
+
+  const fs = new LazyPrimaryFS(options.dataDir, {
+    timelineId: options.timelineId,
+    pageServer,
+    timeline,
+    resolver,
+    index,
+    head,
+    journalDir: options.journalDir,
+    writeLease: options.writeLease,
+  })
+  await fs.recoverPendingOverlay()
+  fs.resetLocalCache({ materializeVisibleRemoteState: false })
+  return fs
+}
+
+async function readManifestChain(
+  pageServer: PageServerApi,
+  timelineId: string,
+  headLsn: string | undefined,
+): Promise<CommitManifest[]> {
+  const manifests: CommitManifest[] = []
+  let lsn = headLsn
+  while (lsn) {
+    const manifest = await pageServer.getCommit(timelineId, lsn)
+    if (!manifest) throw new Error(`Missing manifest for ${timelineId}@${lsn}`)
+    manifests.push(manifest)
+    lsn = manifest.previousLsn
+  }
+  return manifests.reverse()
 }

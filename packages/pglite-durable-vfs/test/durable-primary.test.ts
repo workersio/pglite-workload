@@ -11,13 +11,20 @@ import {
   PageServerHttpClient,
   type PageServerApi,
 } from '../src/pageserver/client.js'
-import type { CommitRequest, CommitResult } from '../src/pageserver/types.js'
+import type {
+  CommitManifest,
+  CommitRequest,
+  CommitResult,
+} from '../src/pageserver/types.js'
 import { createPrimaryApp } from '../src/primary/app.js'
 import {
   DurablePrimary,
   createDurablePrimary,
 } from '../src/primary/durable-primary.js'
 import { DurablePrimaryFS } from '../src/primary/durable-primary-fs.js'
+import { LazyPrimaryFS } from '../src/primary/lazy-primary-fs.js'
+import { ReplicaPageIndex } from '../src/replica/page-index.js'
+import { DiskPageResolver } from '../src/replica/page-resolver.js'
 import { sha256Json } from '../src/shared/hash.js'
 import { PAGE_SIZE } from '../src/shared/constants.js'
 
@@ -285,6 +292,115 @@ describe('DurablePrimary', () => {
     )
     expect(fs.journal.readCompleted()?.append.afterFlush.nextSeq).toBe(3)
   })
+
+  it('starts a lazy primary from the latest pageserver head', async () => {
+    const pageServer = createPageServer({ rootDir: pageServerDir })
+    const fetch = honoFetch(pageServer.app)
+    primary = await createDurablePrimary({
+      dataDir: path.join(rootDir, 'seed-pgdata'),
+      timelineId: 'lazy-primary-demo',
+      pageServerUrl: 'http://pages.local',
+      streamUrl: `${started!.url}/timelines/lazy-primary-demo`,
+      producerId: 'primary-seed',
+      fetch,
+      restartAfterCommit: false,
+    })
+    await primary.exec(
+      'CREATE TABLE lazy_test (id int primary key, value text)',
+    )
+    const seed = await primary.query<{ value: string }>(
+      "INSERT INTO lazy_test VALUES (1, 'seed') RETURNING value",
+    )
+    await primary.close()
+    primary = undefined
+
+    primary = await createDurablePrimary({
+      dataDir: path.join(rootDir, 'lazy-pgdata'),
+      timelineId: 'lazy-primary-demo',
+      pageServerUrl: 'http://pages.local',
+      pageServerRootDir: pageServerDir,
+      streamUrl: `${started!.url}/timelines/lazy-primary-demo`,
+      producerId: 'primary-lazy',
+      fetch,
+      fsMode: 'lazy',
+      restartAfterCommit: false,
+    })
+
+    const read = await primary.query<{ value: string }>(
+      'SELECT value FROM lazy_test ORDER BY id',
+    )
+    const beforeInsertLsn = primary.currentLsn
+    const inserted = await primary.query<{ value: string }>(
+      "INSERT INTO lazy_test VALUES (2, 'lazy') RETURNING value",
+    )
+
+    expect(seed.commit?.lsn).toBeDefined()
+    expect(read.result.rows).toEqual([{ value: 'seed' }])
+    expect(inserted.result.rows).toEqual([{ value: 'lazy' }])
+    expect(inserted.commit?.previousLsn).toBe(beforeInsertLsn)
+    expect(pageServer.store.getHead('lazy-primary-demo')?.lsn).toBe(
+      inserted.commit?.lsn,
+    )
+  })
+
+  it('recovers a pending lazy primary overlay before opening PGlite', async () => {
+    const pageServer = createPageServer({ rootDir: pageServerDir })
+    const pageServerClient = new PageServerHttpClient({
+      baseUrl: 'http://pages.local',
+      fetch: honoFetch(pageServer.app),
+    })
+    const timeline = await DurableTimeline.create({
+      streamUrl: `${started!.url}/timelines/lazy-retry-demo`,
+      producerId: 'lazy-primary-test',
+    })
+    const head = await pageServerClient.createTimeline('lazy-retry-demo')
+    const dataDir = path.join(rootDir, 'lazy-retry-pgdata')
+    const journalDir = path.join(rootDir, 'lazy-retry-journal')
+    const lazyFs = new LazyPrimaryFS(dataDir, {
+      timelineId: 'lazy-retry-demo',
+      pageServer: pageServerClient,
+      timeline,
+      resolver: new DiskPageResolver(pageServer.store),
+      index: new ReplicaPageIndex('lazy-retry-demo'),
+      head,
+      journalDir,
+    })
+    const originalCommit = pageServerClient.commit.bind(pageServerClient)
+    pageServerClient.commit = async (request) => {
+      pageServerClient.commit = originalCommit
+      throw new Error(
+        `synthetic lazy commit failure for ${request.manifest.lsn}`,
+      )
+    }
+
+    lazyFs.mkdir('/base/5', { recursive: true })
+    lazyFs.writeFile('/base/5/16384', new Uint8Array(PAGE_SIZE).fill(12))
+    await expect(lazyFs.syncToFs()).rejects.toThrow(
+      'synthetic lazy commit failure',
+    )
+    expect(lazyFs.journal.readPending()).toBeDefined()
+    await lazyFs.closeFs()
+
+    const recovered = new LazyPrimaryFS(dataDir, {
+      timelineId: 'lazy-retry-demo',
+      pageServer: pageServerClient,
+      timeline,
+      resolver: new DiskPageResolver(pageServer.store),
+      index: new ReplicaPageIndex('lazy-retry-demo'),
+      head,
+      journalDir,
+    })
+    await recovered.recoverPendingOverlay()
+    recovered.resetLocalCache({ materializeVisibleRemoteState: false })
+
+    expect(recovered.journal.readPending()).toBeUndefined()
+    expect(recovered.currentLsn).toBeDefined()
+    expect(pageServer.store.getHead('lazy-retry-demo')?.lsn).toBe(
+      recovered.currentLsn,
+    )
+    expect(fs.existsSync(path.join(dataDir, 'base/5/16384'))).toBe(false)
+    await recovered.closeFs()
+  })
 })
 
 function honoFetch(
@@ -312,6 +428,18 @@ class FlakyPageServer implements PageServerApi {
 
   async getHead(_timelineId: string) {
     return undefined
+  }
+
+  async getCommit(): Promise<CommitManifest | undefined> {
+    throw new Error('getCommit is not implemented for FlakyPageServer')
+  }
+
+  async getPageBytes(): Promise<Uint8Array | undefined> {
+    throw new Error('getPageBytes is not implemented for FlakyPageServer')
+  }
+
+  async getFileBytes(): Promise<Uint8Array | undefined> {
+    throw new Error('getFileBytes is not implemented for FlakyPageServer')
   }
 
   async commit(request: CommitRequest): Promise<CommitResult> {

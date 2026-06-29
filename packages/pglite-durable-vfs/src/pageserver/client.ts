@@ -5,7 +5,7 @@ import type {
   TimelineHead,
 } from './types.js'
 
-export interface PageServerApi {
+export interface PageServerApi extends PageServerReadApi {
   createTimeline(timelineId: string): Promise<TimelineHead>
   getHead(timelineId: string): Promise<TimelineHead | undefined>
   commit(request: CommitRequest): Promise<CommitResult>
