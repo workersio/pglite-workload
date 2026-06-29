@@ -1,0 +1,69 @@
+{
+  "name": "@electric-sql/pglite-durable-vfs",
+  "version": "0.0.0",
+  "description": "Durable page-image VFS prototype for PGlite",
+  "type": "module",
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "postgres",
+    "sql",
+    "database",
+    "wasm",
+    "pglite",
+    "vfs",
+    "replication"
+  ],
+  "author": "Electric DB Limited",
+  "homepage": "https://pglite.dev",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/electric-sql/pglite.git",
+    "directory": "packages/pglite-durable-vfs"
+  },
+  "scripts": {
+    "build": "tsup",
+    "demo": "tsx src/demo/server.ts",
+    "lint": "eslint ./src ./test --report-unused-disable-directives --max-warnings 0",
+    "format": "prettier --write ./src ./test",
+    "typecheck": "tsc",
+    "stylecheck": "pnpm lint && prettier --check ./src ./test",
+    "test": "vitest"
+  },
+  "types": "dist/index.d.ts",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@durable-streams/client": "0.2.6",
+    "@durable-streams/server": "0.3.7",
+    "@hono/node-server": "2.0.6",
+    "hono": "4.12.27"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "workspace:*",
+    "@types/node": "^20.16.11",
+    "tsx": "^4.19.2",
+    "vitest": "^2.1.2"
+  },
+  "peerDependencies": {
+    "@electric-sql/pglite": "workspace:0.5.3"
+  }
+}
