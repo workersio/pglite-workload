@@ -1,7 +1,10 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import type { ProducerJournalState } from '../durable/timeline-stream.js'
+import type {
+  AppendCommitEventResult,
+  ProducerJournalState,
+} from '../durable/timeline-stream.js'
 import type { DirtySnapshot } from '../fs/dirty-tracker.js'
 import {
   ensureDir,
@@ -18,6 +21,11 @@ export interface PendingPrimaryCommit {
   createdAt: string
   producerState: ProducerJournalState
   snapshot: DirtySnapshot
+}
+
+export interface CompletedPrimaryCommit extends PendingPrimaryCommit {
+  completedAt: string
+  append: AppendCommitEventResult
 }
 
 export class PendingCommitJournal {
@@ -40,16 +48,24 @@ export class PendingCommitJournal {
     return readJsonFileIfExists<PendingPrimaryCommit>(this.pendingPath)
   }
 
+  readCompleted(): CompletedPrimaryCommit | undefined {
+    return readJsonFileIfExists<CompletedPrimaryCommit>(this.completedPath)
+  }
+
   writePending(entry: PendingPrimaryCommit): void {
     writeJsonAtomic(this.pendingPath, entry)
     fsyncDir(this.dir)
   }
 
-  markComplete(entry: PendingPrimaryCommit): void {
+  markComplete(
+    entry: PendingPrimaryCommit,
+    append: AppendCommitEventResult,
+  ): void {
     writeJsonAtomic(this.completedPath, {
       ...entry,
       completedAt: new Date().toISOString(),
-    })
+      append,
+    } satisfies CompletedPrimaryCommit)
     fs.rmSync(this.pendingPath, { force: true })
     fsyncDir(this.dir)
   }

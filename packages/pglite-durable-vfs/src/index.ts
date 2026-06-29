@@ -12,6 +12,7 @@ export {
 export {
   DurablePrimaryFS,
   type CommitSummary,
+  type CompletedPrimaryCommit,
   type DurablePrimaryFSOptions,
   type PendingPrimaryCommit,
 } from './primary/durable-primary-fs.js'

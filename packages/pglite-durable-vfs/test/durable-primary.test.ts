@@ -7,7 +7,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DurableTimeline } from '../src/durable/timeline-stream.js'
 import { startDurableStreamTestServer } from '../src/durable/durable-server.js'
 import { createPageServer } from '../src/pageserver/app.js'
-import type { PageServerApi } from '../src/pageserver/client.js'
+import {
+  PageServerHttpClient,
+  type PageServerApi,
+} from '../src/pageserver/client.js'
 import type { CommitRequest, CommitResult } from '../src/pageserver/types.js'
 import { createPrimaryApp } from '../src/primary/app.js'
 import {
@@ -173,6 +176,109 @@ describe('DurablePrimary', () => {
       pageCount: 1,
     })
     expect(pageServer.requests).toHaveLength(2)
+  })
+
+  it('retries stream append after page server commit replay', async () => {
+    const pageServer = createPageServer({ rootDir: pageServerDir })
+    const pageServerClient = new PageServerHttpClient({
+      baseUrl: 'http://pages.local',
+      fetch: honoFetch(pageServer.app),
+    })
+    const timeline = await DurableTimeline.create({
+      streamUrl: `${started!.url}/timelines/stream-retry-demo`,
+      producerId: 'primary-test',
+    })
+    const fs = new DurablePrimaryFS(path.join(rootDir, 'stream-retry-pgdata'), {
+      timelineId: 'stream-retry-demo',
+      pageServer: pageServerClient,
+      timeline,
+      journalDir: path.join(rootDir, 'stream-retry-journal'),
+    })
+    const originalAppend =
+      timeline.appendCommitEventWithProducerState.bind(timeline)
+    timeline.appendCommitEventWithProducerState = async () => {
+      timeline.appendCommitEventWithProducerState = originalAppend
+      throw new Error('synthetic stream failure')
+    }
+
+    fs.mkdir('/base/5', { recursive: true })
+    fs.writeFile('/base/5/16384', new Uint8Array(PAGE_SIZE).fill(8))
+
+    await expect(fs.syncToFs()).rejects.toThrow('synthetic stream failure')
+    expect(pageServer.store.getHead('stream-retry-demo')?.lsn).toBe(
+      fs.journal.readPending()?.lsn,
+    )
+    expect((await timeline.readCommitEvents({ offset: '-1' })).events).toEqual(
+      [],
+    )
+
+    await fs.syncToFs()
+
+    const streamRead = await timeline.readCommitEvents({ offset: '-1' })
+    expect(streamRead.events.map((event) => event.lsn)).toEqual([
+      fs.lastCommit?.lsn,
+    ])
+    expect(fs.journal.readPending()).toBeUndefined()
+  })
+
+  it('does not duplicate stream events when completion fails after append', async () => {
+    const pageServer = createPageServer({ rootDir: pageServerDir })
+    const pageServerClient = new PageServerHttpClient({
+      baseUrl: 'http://pages.local',
+      fetch: honoFetch(pageServer.app),
+    })
+    const timeline = await DurableTimeline.create({
+      streamUrl: `${started!.url}/timelines/completion-retry-demo`,
+      producerId: 'primary-test',
+    })
+    const fs = new DurablePrimaryFS(
+      path.join(rootDir, 'completion-retry-pgdata'),
+      {
+        timelineId: 'completion-retry-demo',
+        pageServer: pageServerClient,
+        timeline,
+        journalDir: path.join(rootDir, 'completion-retry-journal'),
+      },
+    )
+
+    fs.mkdir('/base/5', { recursive: true })
+    fs.writeFile('/base/5/16384', new Uint8Array(PAGE_SIZE).fill(9))
+    await fs.syncToFs()
+
+    const firstLsn = fs.lastCommit?.lsn
+    const firstOffset = fs.lastCommit?.durableOffset
+    expect(fs.journal.readCompleted()?.append.afterFlush.nextSeq).toBe(1)
+
+    const originalMarkComplete = fs.journal.markComplete.bind(fs.journal)
+    fs.journal.markComplete = () => {
+      fs.journal.markComplete = originalMarkComplete
+      throw new Error('synthetic journal failure')
+    }
+
+    fs.writeFile('/base/5/24576', new Uint8Array(PAGE_SIZE).fill(10))
+
+    await expect(fs.syncToFs()).rejects.toThrow('synthetic journal failure')
+    const firstRead = await timeline.readCommitEvents({ offset: '-1' })
+    expect(firstRead.events).toHaveLength(2)
+    expect(fs.journal.readPending()).toBeDefined()
+
+    await fs.syncToFs()
+    const secondLsn = fs.lastCommit?.lsn
+    expect(fs.lastCommit?.durableOffset).not.toBe(firstOffset)
+
+    fs.writeFile('/base/5/32768', new Uint8Array(PAGE_SIZE).fill(11))
+    await fs.syncToFs()
+
+    const streamRead = await timeline.readCommitEvents({ offset: '-1' })
+    expect(streamRead.events.map((event) => event.lsn)).toEqual([
+      firstLsn,
+      secondLsn,
+      fs.lastCommit?.lsn,
+    ])
+    expect(new Set(streamRead.events.map((event) => event.commitId)).size).toBe(
+      3,
+    )
+    expect(fs.journal.readCompleted()?.append.afterFlush.nextSeq).toBe(3)
   })
 })
 

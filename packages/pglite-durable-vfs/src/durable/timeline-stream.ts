@@ -2,6 +2,10 @@ import {
   DurableStream,
   DurableStreamError,
   IdempotentProducer,
+  PRODUCER_EPOCH_HEADER,
+  PRODUCER_ID_HEADER,
+  PRODUCER_SEQ_HEADER,
+  STREAM_OFFSET_HEADER,
   type HeadResult,
   type IdempotentProducerOptions,
   type LiveMode,
@@ -46,6 +50,7 @@ export interface AppendCommitEventResult {
   beforeAppend: ProducerJournalState
   afterFlush: ProducerJournalState
   streamOffset?: Offset
+  duplicate?: boolean
 }
 
 export interface ReadCommitEventsOptions {
@@ -134,6 +139,48 @@ export class DurableTimeline {
     }
   }
 
+  async appendCommitEventWithProducerState(
+    event: CommitEvent,
+    producerState: ProducerJournalState,
+  ): Promise<AppendCommitEventResult> {
+    if (producerState.producerId !== this.producerId) {
+      throw new Error(
+        `Producer state belongs to ${producerState.producerId}, expected ${this.producerId}`,
+      )
+    }
+
+    const response = await fetch(this.stream.url, {
+      method: 'POST',
+      headers: {
+        'content-type': JSON_CONTENT_TYPE,
+        [PRODUCER_ID_HEADER]: producerState.producerId,
+        [PRODUCER_EPOCH_HEADER]: producerState.epoch.toString(),
+        [PRODUCER_SEQ_HEADER]: producerState.nextSeq.toString(),
+      },
+      body: `[${JSON.stringify(event)}]`,
+    })
+
+    if (response.status !== 200 && response.status !== 204) {
+      throw new Error(await appendError(response))
+    }
+
+    const responseSeq = parseProducerSeq(response, producerState.nextSeq)
+    const streamOffset = response.headers.get(STREAM_OFFSET_HEADER) ?? undefined
+    const afterFlush: ProducerJournalState = {
+      producerId: producerState.producerId,
+      epoch: parseProducerEpoch(response, producerState.epoch),
+      nextSeq: responseSeq + 1,
+      lastSuccessfulOffset: streamOffset ?? producerState.lastSuccessfulOffset,
+    }
+
+    return {
+      beforeAppend: producerState,
+      afterFlush,
+      streamOffset,
+      duplicate: response.status === 204,
+    }
+  }
+
   async readCommitEvents({
     offset = '-1',
     live = false,
@@ -187,6 +234,30 @@ export function commitEventFromManifest(
     manifestHash,
     stats: manifest.stats,
   }
+}
+
+async function appendError(response: Response): Promise<string> {
+  const text = await response.text()
+  return text || `Durable stream append failed with ${response.status}`
+}
+
+function parseProducerEpoch(response: Response, fallback: number): number {
+  return parseProducerNumber(response, PRODUCER_EPOCH_HEADER, fallback)
+}
+
+function parseProducerSeq(response: Response, fallback: number): number {
+  return parseProducerNumber(response, PRODUCER_SEQ_HEADER, fallback)
+}
+
+function parseProducerNumber(
+  response: Response,
+  headerName: string,
+  fallback: number,
+): number {
+  const header = response.headers.get(headerName)
+  if (header === null) return fallback
+  const value = Number.parseInt(header, 10)
+  return Number.isSafeInteger(value) ? value : fallback
 }
 
 async function createOrConnectJsonStream(

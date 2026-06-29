@@ -16,6 +16,7 @@ import { incrementLsn } from '../shared/lsn.js'
 import { buildCommitRequest } from './commit-builder.js'
 import {
   PendingCommitJournal,
+  type CompletedPrimaryCommit,
   type PendingPrimaryCommit,
 } from './pending-journal.js'
 
@@ -102,7 +103,7 @@ export class DurablePrimaryFS extends TrackingNodeFS {
       lsn: incrementLsn(this.#currentLsn),
       previousLsn: this.#currentLsn,
       createdAt: new Date().toISOString(),
-      producerState: this.timeline.producerState(),
+      producerState: this.nextProducerState(),
       snapshot,
     }
 
@@ -122,11 +123,12 @@ export class DurablePrimaryFS extends TrackingNodeFS {
       snapshot: entry.snapshot,
     })
     const result = await this.pageServer.commit(request)
-    const append = await this.timeline.appendCommitEvent(
+    const append = await this.timeline.appendCommitEventWithProducerState(
       commitEventFromManifest(request.manifest, {
         manifestUrl: this.pageServer.commitUrl(entry.timelineId, entry.lsn),
         manifestHash: result.manifestHash,
       }),
+      entry.producerState,
     )
 
     this.#currentLsn = entry.lsn
@@ -141,8 +143,19 @@ export class DurablePrimaryFS extends TrackingNodeFS {
       byteCount: request.manifest.stats.byteCount,
     }
     this.#commitSerial += 1
-    this.journal.markComplete(entry)
+    this.journal.markComplete(entry, append)
+  }
+
+  private nextProducerState(): ProducerJournalState {
+    return (
+      this.journal.readCompleted()?.append.afterFlush ??
+      this.timeline.producerState()
+    )
   }
 }
 
-export type { PendingPrimaryCommit, ProducerJournalState }
+export type {
+  CompletedPrimaryCommit,
+  PendingPrimaryCommit,
+  ProducerJournalState,
+}
