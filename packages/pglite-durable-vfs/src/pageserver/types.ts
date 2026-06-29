@@ -83,6 +83,7 @@ export interface PageVersion {
   lsn: string
   path: string
   pageNo: number
+  pageSize: number
   sha256: string
   byteLength: number
   fileSize: number

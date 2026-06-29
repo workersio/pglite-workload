@@ -4,6 +4,8 @@ import * as path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { PGlite } from '@electric-sql/pglite'
+
 import { TrackingNodeFS } from '../src/fs/tracking-node-fs.js'
 import { PAGE_SIZE } from '../src/shared/constants.js'
 
@@ -55,6 +57,40 @@ describe('TrackingNodeFS', () => {
     const snapshot = vfs.getDirtySnapshot()
     expect(snapshot.pages).toHaveLength(1)
     expect(snapshot.pages[0]?.pageNo).toBe(0)
+  })
+
+  it('writes from ArrayBuffer-backed wasm heap views', () => {
+    vfs.mkdir('/base/5', { recursive: true })
+    vfs.writeFile('/base/5/16384', new Uint8Array(PAGE_SIZE))
+    vfs.drainDirtySnapshot()
+
+    const heap = new ArrayBuffer(32)
+    const heapView = new Uint8Array(heap)
+    heapView.set([7, 8, 9], 16)
+    const fd = vfs.open('/base/5/16384')
+    vfs.write(fd, heap, 16, 3, 0)
+    const readBuffer = new Uint8Array(3)
+    vfs.read(fd, readBuffer, 0, 3, 0)
+    vfs.close(fd)
+
+    expect(readBuffer).toEqual(new Uint8Array([7, 8, 9]))
+    expect(vfs.getDirtySnapshot().pages[0]?.pageNo).toBe(0)
+  })
+
+  it('mounts into PGlite and records query writes', async () => {
+    const db = await PGlite.create({ fs: vfs })
+    try {
+      await db.exec('CREATE TABLE test (id int primary key, value text)')
+      await db.exec("INSERT INTO test VALUES (1, 'one')")
+      const result = await db.query<{ value: string }>(
+        'SELECT value FROM test WHERE id = 1',
+      )
+
+      expect(result.rows).toEqual([{ value: 'one' }])
+      expect(vfs.getDirtySnapshot().isEmpty).toBe(false)
+    } finally {
+      await db.close()
+    }
   })
 
   it('records metadata operations in order', () => {

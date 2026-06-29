@@ -8,10 +8,12 @@ import { DiskCommitStore } from '../src/pageserver/commit-store.js'
 import { DiskObjectStore } from '../src/pageserver/object-store.js'
 import type {
   CommitManifest,
+  CommitOperation,
   FileImageOperation,
   PageImageOperation,
 } from '../src/pageserver/types.js'
 import { encodeLsn } from '../src/pageserver/disk-utils.js'
+import { PAGE_SIZE } from '../src/shared/constants.js'
 
 describe('DiskObjectStore', () => {
   let rootDir: string
@@ -191,6 +193,91 @@ describe('DiskCommitStore', () => {
       }),
     ).toThrow(/Commit conflict/)
   })
+
+  it('rejects commits that move the timeline head backwards', () => {
+    const object = store.objectStore.putBytes(new Uint8Array([1]))
+
+    store.commit({
+      manifest: manifest({
+        lsn: '0/00000020',
+        page: pageOperation(object.sha256, object.byteLength),
+      }),
+    })
+
+    expect(() =>
+      store.commit({
+        manifest: manifest({
+          lsn: '0/00000010',
+          previousLsn: '0/00000020',
+          commitId: 'backwards',
+          page: pageOperation(object.sha256, object.byteLength),
+        }),
+      }),
+    ).toThrow(/must be greater than head/)
+  })
+
+  it('does not serve old relation pages beyond a truncate LSN', () => {
+    const firstPage = store.objectStore.putBytes(new Uint8Array([1]))
+    const secondPage = store.objectStore.putBytes(new Uint8Array([2]))
+
+    store.commit({
+      manifest: manifest({
+        lsn: '0/00000010',
+        operations: [
+          pageOperation(firstPage.sha256, firstPage.byteLength),
+          pageOperation(secondPage.sha256, secondPage.byteLength, {
+            pageNo: 1,
+          }),
+        ],
+      }),
+    })
+    store.commit({
+      manifest: manifest({
+        lsn: '0/00000020',
+        previousLsn: '0/00000010',
+        commitId: 'truncate',
+        operations: [
+          { type: 'truncate', path: '/base/5/16384', size: PAGE_SIZE },
+        ],
+      }),
+    })
+
+    expect(
+      store.getPageBytes('demo', '/base/5/16384', 0, '0/00000020'),
+    ).toEqual(new Uint8Array([1]))
+    expect(store.getPageBytes('demo', '/base/5/16384', 1, '0/00000020')).toBe(
+      undefined,
+    )
+  })
+
+  it('does not serve old file images after unlink', () => {
+    const object = store.objectStore.putBytes(new Uint8Array([9, 8, 7]))
+
+    store.commit({
+      manifest: manifest({
+        lsn: '0/00000010',
+        file: {
+          type: 'file',
+          path: '/global/pg_control',
+          fileSize: 3,
+          sha256: object.sha256,
+          byteLength: object.byteLength,
+        },
+      }),
+    })
+    store.commit({
+      manifest: manifest({
+        lsn: '0/00000020',
+        previousLsn: '0/00000010',
+        commitId: 'unlink',
+        operations: [{ type: 'unlink', path: '/global/pg_control' }],
+      }),
+    })
+
+    expect(store.getFileBytes('demo', '/global/pg_control', '0/00000020')).toBe(
+      undefined,
+    )
+  })
 })
 
 function manifest({
@@ -199,16 +286,27 @@ function manifest({
   commitId = 'commit-1',
   page,
   file,
+  operations,
 }: {
   lsn: string
   previousLsn?: string
   commitId?: string
   page?: PageImageOperation
   file?: FileImageOperation
+  operations?: CommitOperation[]
 }): CommitManifest {
-  const operations = [page, file].filter(
-    (operation): operation is PageImageOperation | FileImageOperation =>
-      operation !== undefined,
+  const manifestOperations =
+    operations ??
+    [page, file].filter(
+      (operation): operation is PageImageOperation | FileImageOperation =>
+        operation !== undefined,
+    )
+  const byteCount = manifestOperations.reduce(
+    (total, operation) =>
+      operation.type === 'page' || operation.type === 'file'
+        ? total + operation.byteLength
+        : total,
+    0,
   )
 
   return {
@@ -219,28 +317,43 @@ function manifest({
     commitId,
     createdAt: '2026-01-01T00:00:00.000Z',
     replicaApplyMode: 'live-invalidate',
-    operations,
+    operations: manifestOperations,
     invalidations: [],
     stats: {
-      pageCount: page ? 1 : 0,
-      fileCount: file ? 1 : 0,
-      metadataCount: 0,
+      pageCount: manifestOperations.filter(
+        (operation) => operation.type === 'page',
+      ).length,
+      fileCount: manifestOperations.filter(
+        (operation) => operation.type === 'file',
+      ).length,
+      metadataCount: manifestOperations.filter(
+        (operation) => operation.type !== 'page' && operation.type !== 'file',
+      ).length,
       invalidationCount: 0,
-      byteCount: operations.reduce(
-        (total, operation) => total + operation.byteLength,
-        0,
-      ),
+      byteCount,
     },
   }
 }
 
-function pageOperation(sha256: string, byteLength: number): PageImageOperation {
+function pageOperation(
+  sha256: string,
+  byteLength: number,
+  {
+    pageNo = 0,
+    path = '/base/5/16384',
+    fileSize = 8192,
+  }: {
+    pageNo?: number
+    path?: string
+    fileSize?: number
+  } = {},
+): PageImageOperation {
   return {
     type: 'page',
-    path: '/base/5/16384',
-    pageNo: 0,
+    path,
+    pageNo,
     pageSize: 8192,
-    fileSize: 8192,
+    fileSize,
     sha256,
     byteLength,
   }

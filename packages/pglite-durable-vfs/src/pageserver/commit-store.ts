@@ -29,7 +29,21 @@ import type {
 interface TimelineIndexes {
   pages: Map<string, PageVersion[]>
   files: Map<string, FileVersion[]>
+  visibility: Map<string, VisibilityBarrier[]>
 }
+
+type VisibilityBarrier =
+  | {
+      type: 'truncate'
+      lsn: string
+      path: string
+      size: number
+    }
+  | {
+      type: 'delete'
+      lsn: string
+      path: string
+    }
 
 export class DiskCommitStore {
   readonly rootDir: string
@@ -61,7 +75,7 @@ export class DiskCommitStore {
 
     const head = { timelineId }
     writeJsonAtomic(path.join(dir, 'head.json'), head)
-    this.#indexes.set(timelineId, { pages: new Map(), files: new Map() })
+    this.#indexes.set(timelineId, emptyIndexes())
     return head
   }
 
@@ -113,6 +127,11 @@ export class DiskCommitStore {
         }`,
       )
     }
+    if (head?.lsn && compareLsn(manifest.lsn, head.lsn) <= 0) {
+      throw new Error(
+        `Commit LSN ${manifest.lsn} must be greater than head ${head.lsn}`,
+      )
+    }
 
     this.validateManifestObjects(manifest)
     this.promoteCommit(manifest, manifestHash)
@@ -140,8 +159,11 @@ export class DiskCommitStore {
     lsn: string,
   ): PageVersion | undefined {
     const indexes = this.ensureIndexes(timelineId)
-    const versions = indexes.pages.get(pageKey(filePath, pageNo)) ?? []
-    return latestAtOrBefore(versions, lsn)
+    const normalizedPath = classifyPgPath(filePath).normalizedPath
+    const versions = indexes.pages.get(pageKey(normalizedPath, pageNo)) ?? []
+    const version = latestAtOrBefore(versions, lsn)
+    if (!version) return undefined
+    return isPageVisible(indexes, version, lsn) ? version : undefined
   }
 
   getFileVersion(
@@ -150,9 +172,11 @@ export class DiskCommitStore {
     lsn: string,
   ): FileVersion | undefined {
     const indexes = this.ensureIndexes(timelineId)
-    const versions =
-      indexes.files.get(classifyPgPath(filePath).normalizedPath) ?? []
-    return latestAtOrBefore(versions, lsn)
+    const normalizedPath = classifyPgPath(filePath).normalizedPath
+    const versions = indexes.files.get(normalizedPath) ?? []
+    const version = latestAtOrBefore(versions, lsn)
+    if (!version) return undefined
+    return isFileVisible(indexes, version, lsn) ? version : undefined
   }
 
   getPageBytes(
@@ -175,7 +199,7 @@ export class DiskCommitStore {
   }
 
   rebuildTimelineIndexes(timelineId: string): TimelineIndexes {
-    const indexes: TimelineIndexes = { pages: new Map(), files: new Map() }
+    const indexes = emptyIndexes()
     const commitsDir = path.join(this.timelineDir(timelineId), 'commits')
     if (!fs.existsSync(commitsDir)) {
       this.#indexes.set(timelineId, indexes)
@@ -293,6 +317,30 @@ export class DiskCommitStore {
       } else if (operation.type === 'file') {
         const version = fileVersion(manifest, operation)
         appendVersion(indexes.files, version.path, version)
+      } else if (operation.type === 'truncate') {
+        appendVisibility(indexes.visibility, {
+          type: 'truncate',
+          lsn: manifest.lsn,
+          path: classifyPgPath(operation.path).normalizedPath,
+          size: operation.size,
+        })
+      } else if (operation.type === 'unlink') {
+        appendVisibility(indexes.visibility, {
+          type: 'delete',
+          lsn: manifest.lsn,
+          path: classifyPgPath(operation.path).normalizedPath,
+        })
+      } else if (operation.type === 'rename') {
+        appendVisibility(indexes.visibility, {
+          type: 'delete',
+          lsn: manifest.lsn,
+          path: classifyPgPath(operation.from).normalizedPath,
+        })
+        appendVisibility(indexes.visibility, {
+          type: 'delete',
+          lsn: manifest.lsn,
+          path: classifyPgPath(operation.to).normalizedPath,
+        })
       }
     }
   }
@@ -311,6 +359,7 @@ function pageVersion(
     lsn: manifest.lsn,
     path: classifyPgPath(operation.path).normalizedPath,
     pageNo: operation.pageNo,
+    pageSize: operation.pageSize,
     sha256: operation.sha256,
     byteLength: operation.byteLength,
     fileSize: operation.fileSize,
@@ -346,6 +395,58 @@ function appendVersion<T extends { lsn: string }>(
   versionsByKey.set(key, versions)
 }
 
+function appendVisibility(
+  barriersByPath: Map<string, VisibilityBarrier[]>,
+  barrier: VisibilityBarrier,
+): void {
+  const barriers = barriersByPath.get(barrier.path) ?? []
+  barriers.push(barrier)
+  barriers.sort((left, right) => compareLsn(left.lsn, right.lsn))
+  barriersByPath.set(barrier.path, barriers)
+}
+
+function isPageVisible(
+  indexes: TimelineIndexes,
+  version: PageVersion,
+  readLsn: string,
+): boolean {
+  const barrier = latestBarrierAfterVersion(
+    indexes.visibility.get(version.path) ?? [],
+    version.lsn,
+    readLsn,
+  )
+  if (!barrier) return true
+  if (barrier.type === 'delete') return false
+  return version.pageNo * version.pageSize < barrier.size
+}
+
+function isFileVisible(
+  indexes: TimelineIndexes,
+  version: FileVersion,
+  readLsn: string,
+): boolean {
+  const barrier = latestBarrierAfterVersion(
+    indexes.visibility.get(version.path) ?? [],
+    version.lsn,
+    readLsn,
+  )
+  return !barrier
+}
+
+function latestBarrierAfterVersion(
+  barriers: VisibilityBarrier[],
+  versionLsn: string,
+  readLsn: string,
+): VisibilityBarrier | undefined {
+  for (let index = barriers.length - 1; index >= 0; index -= 1) {
+    const barrier = barriers[index]
+    if (!barrier || compareLsn(barrier.lsn, readLsn) > 0) continue
+    if (compareLsn(barrier.lsn, versionLsn) > 0) return barrier
+    return undefined
+  }
+  return undefined
+}
+
 function latestAtOrBefore<T extends { lsn: string }>(
   versions: T[],
   lsn: string,
@@ -355,4 +456,12 @@ function latestAtOrBefore<T extends { lsn: string }>(
     if (version && lsnLessThanOrEqual(version.lsn, lsn)) return version
   }
   return undefined
+}
+
+function emptyIndexes(): TimelineIndexes {
+  return {
+    pages: new Map(),
+    files: new Map(),
+    visibility: new Map(),
+  }
 }

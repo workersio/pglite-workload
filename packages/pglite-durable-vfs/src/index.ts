@@ -4,6 +4,7 @@ export {
   commitEventFromManifest,
   type AppendCommitEventResult,
   type CommitEvent,
+  type CommitEventHandler,
   type ProducerJournalState,
   type ReadCommitEventsResult,
 } from './durable/timeline-stream.js'

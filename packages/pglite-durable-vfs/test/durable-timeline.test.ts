@@ -116,6 +116,35 @@ describe('DurableTimeline', () => {
     expect(seen).toEqual([event])
   })
 
+  it('only exposes a checkpoint after a full JSON batch is applied', async () => {
+    const timeline = await DurableTimeline.create({
+      streamUrl: `${started!.url}/timelines/batched-live`,
+      producerId: 'pglite-demo',
+      producer: { lingerMs: 100 },
+    })
+    const first = commitEvent('0/00000010', 'commit-1')
+    const second = commitEvent('0/00000020', 'commit-2', '0/00000010')
+    timeline.producer.append(JSON.stringify(first))
+    timeline.producer.append(JSON.stringify(second))
+    await timeline.producer.flush()
+
+    const seen: CommitEvent[] = []
+    const checkpoints: Array<string | undefined> = []
+    const subscription = await timeline.subscribeCommitEvents(
+      (event, checkpoint) => {
+        seen.push(event)
+        checkpoints.push(checkpoint)
+      },
+      { offset: '-1', live: true },
+    )
+    await waitFor(() => seen.length === 2)
+    subscription.cancel()
+
+    expect(seen).toEqual([first, second])
+    expect(checkpoints[0]).toBeUndefined()
+    expect(checkpoints[1]).toBeDefined()
+  })
+
   it('builds commit events from manifests', () => {
     const manifest = commitManifest('0/00000010', 'commit-1')
 

@@ -63,6 +63,11 @@ export interface CommitSubscription {
   closed: Promise<void>
 }
 
+export type CommitEventHandler = (
+  event: CommitEvent,
+  checkpoint?: Offset,
+) => void | Promise<void>
+
 const JSON_CONTENT_TYPE = 'application/json'
 
 export class DurableTimeline {
@@ -139,13 +144,11 @@ export class DurableTimeline {
       json: true,
     })
     const events = await response.json<CommitEvent>()
-    const head = await this.head()
-    const nextOffset = head.exists ? (head.offset ?? offset) : offset
-    return { events, offset: nextOffset }
+    return { events, offset: response.offset }
   }
 
   async subscribeCommitEvents(
-    onCommit: (event: CommitEvent, offset: Offset) => void | Promise<void>,
+    onCommit: CommitEventHandler,
     { offset = '-1', live = true }: ReadCommitEventsOptions = {},
   ): Promise<CommitSubscription> {
     const response = await this.stream.stream<CommitEvent>({
@@ -154,8 +157,10 @@ export class DurableTimeline {
       json: true,
     })
     const unsubscribe = response.subscribeJson<CommitEvent>(async (batch) => {
-      for (const event of batch.items) {
-        await onCommit(event, batch.offset)
+      for (const [index, event] of batch.items.entries()) {
+        const checkpoint =
+          index === batch.items.length - 1 ? batch.offset : undefined
+        await onCommit(event, checkpoint)
       }
     })
     return {
