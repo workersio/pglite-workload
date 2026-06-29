@@ -62,6 +62,14 @@ export {
   hasPGliteNativeInvalidation,
 } from './replica/native-invalidator.js'
 export {
+  SabPageResolver,
+  type SabPageResolverOptions,
+} from './sab/sab-page-resolver.js'
+export {
+  createSabControlBlock,
+  type SabControlBlock,
+} from './sab/sab-control-block.js'
+export {
   createDurableVfsDemo,
   type DurableVfsDemo,
   type DurableVfsDemoOptions,
