@@ -83,14 +83,24 @@ const readOnlyFsBundlePathPrefixes = [
   '/pglite/share/',
 ]
 const readOnlyFsBundlePaths = new Set(['/pglite/locale-a'])
+const copiedFsBundlePaths = new Set([
+  '/home/postgres/.pgpass',
+  '/pglite/password',
+  '/pglite/pgstdin',
+  '/pglite/pgstdout',
+])
+
+type PGliteFsBundleBuffer = ArrayBuffer | SharedArrayBuffer
 
 function loadFsBundleBuffer(
   fsBundle: PGliteFsBundle | undefined,
   fsBundleUrl: URL,
-): Promise<ArrayBuffer> {
+): Promise<PGliteFsBundleBuffer> {
   if (!fsBundle) return pglUtils.getFsBundle(fsBundleUrl)
-  if (fsBundle instanceof ArrayBuffer) return Promise.resolve(fsBundle)
-  return fsBundle.arrayBuffer()
+  if (fsBundle instanceof ArrayBuffer || isSharedArrayBuffer(fsBundle)) {
+    return Promise.resolve(prepareFsBundleBuffer(fsBundle))
+  }
+  return fsBundle.arrayBuffer().then(prepareFsBundleBuffer)
 }
 
 function installReadOnlyFsBundleHook(mod: PostgresMod): void {
@@ -108,15 +118,38 @@ function installReadOnlyFsBundleHook(mod: PostgresMod): void {
     canOwn: boolean,
   ) => {
     const path = fsBundlePath(parent, name)
+    const isReadOnlyPath = isReadOnlyFsBundlePath(path)
     createDataFile(
       parent,
       name,
       fileData,
       canRead,
-      isReadOnlyFsBundlePath(path) ? false : canWrite,
-      canOwn,
+      isReadOnlyPath ? false : canWrite,
+      isReadOnlyPath || !copiedFsBundlePaths.has(path) ? canOwn : false,
     )
   }
+}
+
+function prepareFsBundleBuffer(
+  buffer: PGliteFsBundleBuffer,
+): PGliteFsBundleBuffer {
+  if (!isSharedArrayBuffer(buffer)) return buffer
+
+  try {
+    if (buffer.constructor !== ArrayBuffer) {
+      Object.defineProperty(buffer, 'constructor', {
+        configurable: true,
+        value: ArrayBuffer,
+      })
+    }
+  } catch (error) {
+    void error
+    throw new Error(
+      'SharedArrayBuffer fsBundle requires an extensible buffer for Emscripten package loading',
+    )
+  }
+
+  return buffer
 }
 
 function fsBundlePath(parent: string, name: string | null): string {
@@ -408,7 +441,7 @@ export class PGlite
       options.fsBundle,
       fsBundleUrl,
     )
-    let fsBundleBuffer: ArrayBuffer
+    let fsBundleBuffer: PGliteFsBundleBuffer
     fsBundleBufferPromise.then((buffer) => {
       fsBundleBuffer = buffer
     })
@@ -467,7 +500,7 @@ export class PGlite
               `Invalid FS bundle size: ${fsBundleBuffer.byteLength} !== ${remotePackageSize}`,
             )
           }
-          return fsBundleBuffer
+          return fsBundleBuffer as ArrayBuffer
         }
         throw new Error(`Unknown package: ${remotePackageName}`)
       },
@@ -619,7 +652,12 @@ export class PGlite
 
     // Await the fs bundle - we do this just before calling PostgresModFactory
     // as it needs the fs bundle to be ready.
-    await fsBundleBufferPromise
+    fsBundleBuffer = await fsBundleBufferPromise
+    if (isSharedArrayBuffer(fsBundleBuffer) && !options.readOnlyFsBundle) {
+      throw new Error(
+        'SharedArrayBuffer fsBundle requires readOnlyFsBundle to prevent shared package files from being mutated',
+      )
+    }
 
     // Load the database engine
     this.mod = await pgliteModFactory(emscriptenOpts)
@@ -1451,8 +1489,12 @@ export class PGlite
 }
 
 function isSharedWasmMemory(memory: WebAssembly.Memory): boolean {
+  return isSharedArrayBuffer(memory.buffer)
+}
+
+function isSharedArrayBuffer(buffer: unknown): buffer is SharedArrayBuffer {
   return (
     typeof SharedArrayBuffer !== 'undefined' &&
-    memory.buffer instanceof SharedArrayBuffer
+    buffer instanceof SharedArrayBuffer
   )
 }

@@ -68,10 +68,10 @@ describe('createSharedPGliteMemory', () => {
 
       expect(options.pgliteModFactory).toBeTypeOf('function')
       expect(options.pgliteWasmModule).toBeInstanceOf(WebAssembly.Module)
-      expect(options.fsBundle).toBeInstanceOf(ArrayBuffer)
-      expect([...new Uint8Array(options.fsBundle as ArrayBuffer)]).toEqual([
-        1, 2, 3,
-      ])
+      expect(options.fsBundle).toBeInstanceOf(SharedArrayBuffer)
+      expect([
+        ...new Uint8Array(options.fsBundle as SharedArrayBuffer),
+      ]).toEqual([1, 2, 3])
       expect(options.readOnlyFsBundle).toBe(true)
       expect(options.wasmMemory.buffer).toBeInstanceOf(SharedArrayBuffer)
       expect(options.wasmMemory.buffer.byteLength).toBe(64 * 1024)

@@ -26,6 +26,7 @@ interface BenchmarkOptions {
   initialMemoryMb: number
   workerTimeoutMs: number
   shareWasm: boolean
+  shareFsBundle: boolean
   readOnlyFsBundle: boolean
   resolver: ResolverMode
   lowMemoryPostgres: boolean
@@ -47,6 +48,7 @@ interface WorkerInit {
   initialMemoryBytes: number
   startParams?: string[]
   wasmModule?: WebAssembly.Module
+  fsBundle?: SharedArrayBuffer
   readOnlyFsBundle: boolean
   verbose: boolean
   timeoutMs: number
@@ -161,6 +163,9 @@ async function main(): Promise<void> {
     const wasmModule = options.shareWasm
       ? await compilePGliteWasmModule()
       : undefined
+    const fsBundle = options.shareFsBundle
+      ? await loadSharedPGliteFsBundle()
+      : undefined
 
     primary = await createDurablePrimary({
       dataDir: path.join(rootDir, 'primary'),
@@ -169,6 +174,7 @@ async function main(): Promise<void> {
       streamUrl: `${streamServer.url}/timelines/${timelineId}`,
       producerId: 'worker-replica-bench-primary',
       pgliteOptions: {
+        fsBundle,
         startParams,
         readOnlyFsBundle: options.readOnlyFsBundle,
       },
@@ -202,6 +208,7 @@ async function main(): Promise<void> {
           initialMemoryBytes,
           startParams,
           wasmModule,
+          fsBundle,
           readOnlyFsBundle: options.readOnlyFsBundle,
           verbose: options.verbose,
           timeoutMs: options.workerTimeoutMs,
@@ -449,6 +456,17 @@ async function compilePGliteWasmModule(): Promise<WebAssembly.Module> {
   return await WebAssembly.compile(await readFile(wasmPath))
 }
 
+async function loadSharedPGliteFsBundle(): Promise<SharedArrayBuffer> {
+  const dataPath = path.join(repoRoot, 'packages/pglite/release/pglite.data')
+  if (!existsSync(dataPath)) {
+    throw new Error(`Missing PGlite data artifact at ${dataPath}`)
+  }
+  const bytes = await readFile(dataPath)
+  const shared = new SharedArrayBuffer(bytes.byteLength)
+  new Uint8Array(shared).set(bytes)
+  return shared
+}
+
 async function snapshot(
   replicas: number,
   workerHandles: ReplicaWorkerHandle[],
@@ -483,7 +501,7 @@ function printPlan(rootDir: string, opts: BenchmarkOptions): void {
     `replicas=${opts.replicas} step=${opts.step} rows=${opts.rows} payloadBytes=${opts.payloadBytes}`,
   )
   console.log(
-    `resolver=${opts.resolver} shareWasm=${opts.shareWasm} readOnlyFsBundle=${opts.readOnlyFsBundle} initialMemoryMb=${opts.initialMemoryMb} lowMemoryPostgres=${opts.lowMemoryPostgres}`,
+    `resolver=${opts.resolver} shareWasm=${opts.shareWasm} shareFsBundle=${opts.shareFsBundle} readOnlyFsBundle=${opts.readOnlyFsBundle} initialMemoryMb=${opts.initialMemoryMb} lowMemoryPostgres=${opts.lowMemoryPostgres}`,
   )
   console.log('')
 }
@@ -528,6 +546,7 @@ function parseOptions(argv: string[]): BenchmarkOptions {
     initialMemoryMb: 128,
     workerTimeoutMs: 120_000,
     shareWasm: true,
+    shareFsBundle: true,
     readOnlyFsBundle: true,
     resolver: 'disk',
     lowMemoryPostgres: false,
@@ -600,6 +619,12 @@ function parseOptions(argv: string[]): BenchmarkOptions {
       case '--no-share-wasm':
         opts.shareWasm = false
         break
+      case '--share-fs-bundle':
+        opts.shareFsBundle = true
+        break
+      case '--no-share-fs-bundle':
+        opts.shareFsBundle = false
+        break
       case '--read-only-fs-bundle':
         opts.readOnlyFsBundle = true
         break
@@ -612,6 +637,9 @@ function parseOptions(argv: string[]): BenchmarkOptions {
   }
 
   if (opts.step > opts.replicas) opts.step = opts.replicas
+  if (opts.shareFsBundle && !opts.readOnlyFsBundle) {
+    throw new Error('--share-fs-bundle requires --read-only-fs-bundle')
+  }
   return opts
 }
 
@@ -632,6 +660,8 @@ Options:
   --settle-ms <n>         Delay before each measurement. Default: 100
   --share-wasm            Compile pglite.wasm once in parent and clone the module. Default
   --no-share-wasm         Let each worker use the package default WASM loading path
+  --share-fs-bundle       Load pglite.data once into a SharedArrayBuffer and share it. Default
+  --no-share-fs-bundle    Let each worker use the package default data loading path
   --read-only-fs-bundle   Mark package data files read-only inside each PGlite. Default
   --no-read-only-fs-bundle
                           Leave package data files writable

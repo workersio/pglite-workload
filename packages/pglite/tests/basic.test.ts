@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { readFile } from 'node:fs/promises'
 import { expectToThrowAsync, testEsmCjsAndDTC } from './test-utils.ts'
 import { identifier } from '../dist/templating.js'
 import { PGlite } from '../dist/index.js'
@@ -693,6 +694,32 @@ await testEsmCjsAndDTC(async (importType) => {
           new Uint8Array([0]),
         )
       }).toThrow()
+    })
+
+    it('fsBundle can share packaged system file bytes from a SharedArrayBuffer', async () => {
+      await db.close()
+      const dataBytes = await readFile(
+        new URL('../release/pglite.data', import.meta.url),
+      )
+      const sharedBundle = new SharedArrayBuffer(dataBytes.byteLength)
+      new Uint8Array(sharedBundle).set(dataBytes)
+
+      db = await PGlite.create({
+        fsBundle: sharedBundle,
+        readOnlyFsBundle: true,
+      })
+
+      await expect(db.query('SELECT 1 AS value')).resolves.toMatchObject({
+        rows: [{ value: 1 }],
+      })
+      const postgresBki = db.Module.FS.lookupPath(
+        '/pglite/share/postgresql/postgres.bki',
+      ).node.contents as Uint8Array
+      const pgstdin = db.Module.FS.lookupPath('/pglite/pgstdin').node
+        .contents as Uint8Array
+
+      expect(postgresBki.buffer).toBe(sharedBundle)
+      expect(pgstdin.buffer).not.toBe(sharedBundle)
     })
 
     it('shared wasmMemory requires a shared wasm module', async () => {

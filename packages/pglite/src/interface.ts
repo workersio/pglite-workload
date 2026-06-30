@@ -84,7 +84,7 @@ export interface DumpDataDirResult {
   filename: string
 }
 
-export type PGliteFsBundle = Blob | File | ArrayBuffer
+export type PGliteFsBundle = Blob | File | ArrayBuffer | SharedArrayBuffer
 
 export interface PGliteOptions<TExtensions extends Extensions = Extensions> {
   noInitDb?: boolean

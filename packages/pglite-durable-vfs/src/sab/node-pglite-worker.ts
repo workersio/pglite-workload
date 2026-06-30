@@ -296,7 +296,7 @@ async function loadSharedPGliteRuntimeOptions({
     loadPGliteModFactory(resolvedModulePath),
   ])
   return {
-    fsBundle: arrayBufferFromBuffer(dataBytes),
+    fsBundle: sharedArrayBufferFromBuffer(dataBytes),
     pgliteModFactory,
     pgliteWasmModule: await WebAssembly.compile(wasmBytes),
     readOnlyFsBundle: true,
@@ -304,8 +304,10 @@ async function loadSharedPGliteRuntimeOptions({
   }
 }
 
-function arrayBufferFromBuffer(bytes) {
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+function sharedArrayBufferFromBuffer(bytes) {
+  const shared = new SharedArrayBuffer(bytes.byteLength)
+  new Uint8Array(shared).set(bytes)
+  return shared
 }
 
 async function loadPGliteModFactory(modulePath) {
