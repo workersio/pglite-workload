@@ -54,7 +54,7 @@ type NativeRelation = Pick<NativeRange, 'spcOid' | 'dbOid' | 'relNumber'>
 export class PGliteNativeInvalidator implements ReplicaInvalidator {
   readonly getDb: () => PGlite | undefined
 
-  #handledLsns = new Set<string>()
+  #lastHandledLsn?: string
 
   constructor(getDb: () => PGlite | undefined) {
     this.getDb = getDb
@@ -67,12 +67,16 @@ export class PGliteNativeInvalidator implements ReplicaInvalidator {
       !input.invalidateSystemCaches &&
       !input.invalidateSmgr
     ) {
-      this.#handledLsns.add(manifest.lsn)
+      this.markHandled(manifest)
       return
     }
 
     const nativeModule = pgliteNativeInvalidationModule(this.getDb())
-    if (!nativeModule?._pgl_invalidate_remote_pages) return
+    if (!nativeModule?._pgl_invalidate_remote_pages) {
+      throw new Error(
+        `Native PGlite invalidation hook is unavailable for commit ${manifest.lsn}`,
+      )
+    }
 
     let invalidateSystemCaches = input.invalidateSystemCaches
     for (const relation of input.relationCacheInvalidations) {
@@ -111,16 +115,20 @@ export class PGliteNativeInvalidator implements ReplicaInvalidator {
       if (result < 0) {
         throw new Error(`Native PGlite invalidation failed with ${result}`)
       }
-      this.#handledLsns.add(manifest.lsn)
+      this.markHandled(manifest)
     } finally {
       if (rangesPtr !== 0) nativeModule._free(rangesPtr)
     }
   }
 
   didHandle(manifest: CommitManifest): boolean {
-    const handled = this.#handledLsns.has(manifest.lsn)
-    this.#handledLsns.delete(manifest.lsn)
+    const handled = this.#lastHandledLsn === manifest.lsn
+    if (handled) this.#lastHandledLsn = undefined
     return handled
+  }
+
+  private markHandled(manifest: CommitManifest): void {
+    this.#lastHandledLsn = manifest.lsn
   }
 }
 

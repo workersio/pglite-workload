@@ -1437,6 +1437,10 @@ buffer invalidation, and visible-LSN advancement wait for the gate to become
 idle. That keeps direct PGlite calls and HTTP endpoints on the same snapshot
 boundary.
 
+Initial catch-up before opening PGlite can skip buffer invalidation because no
+PGlite buffers exist yet. Once PGlite is open, missing native invalidation is an
+apply error; the replica must not advance `appliedLsn` with stale buffers.
+
 Demo Hono API:
 
 ```text

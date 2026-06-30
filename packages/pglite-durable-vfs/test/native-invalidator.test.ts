@@ -142,7 +142,7 @@ describe('PGliteNativeInvalidator', () => {
     expect(native.calls[0]?.invalidateSystemCaches).toBe(true)
   })
 
-  it('does not claim native handling when relation invalidations need a missing hook', () => {
+  it('fails closed when relation invalidations need a missing native hook', () => {
     const manifest = baseManifest({
       invalidations: [
         {
@@ -160,8 +160,9 @@ describe('PGliteNativeInvalidator', () => {
       fakePGlite(new FakeNativeModule({ exposeHook: false }).module),
     )
 
-    invalidator.invalidate(manifest)
-
+    expect(() => invalidator.invalidate(manifest)).toThrow(
+      'Native PGlite invalidation hook is unavailable for commit 0/00000010',
+    )
     expect(invalidator.didHandle(manifest)).toBe(false)
   })
 

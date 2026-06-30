@@ -24,6 +24,12 @@ import {
   type ReplicaTailerStatus,
 } from './tailer.js'
 
+const replicaQueryGateHook = Symbol('replicaQueryGateHook')
+
+type ReplicaQueryGateHooks = FilesystemQueryHooks & {
+  [replicaQueryGateHook]?: ReplicaQueryGate
+}
+
 export interface DurableReplicaOptions {
   dataDir: string
   timelineId: string
@@ -192,6 +198,7 @@ export async function createDurableReplica(
   if (options.autoCatchUp) {
     await tailer.catchUpOnce({
       allowRestartWithoutHook: true,
+      skipInvalidation: true,
       skipAfterApply: true,
     })
   }
@@ -217,13 +224,15 @@ export function installReplicaQueryGate(
   fs: LazyReplicaFS,
   queryGate: ReplicaQueryGate,
 ): void {
-  fs.queryHooks = createReplicaQueryHooks(queryGate, fs.queryHooks)
+  const previous = fs.queryHooks as ReplicaQueryGateHooks | undefined
+  if (previous?.[replicaQueryGateHook] === queryGate) return
+  fs.queryHooks = createReplicaQueryHooks(queryGate, previous)
 }
 
 function createReplicaQueryHooks(
   queryGate: ReplicaQueryGate,
   previous?: FilesystemQueryHooks,
-): FilesystemQueryHooks {
+): ReplicaQueryGateHooks {
   return {
     aroundQuery: async (context, operation) =>
       await queryGate.runQuery(async () => {
@@ -232,6 +241,7 @@ function createReplicaQueryHooks(
         }
         return await operation()
       }),
+    [replicaQueryGateHook]: queryGate,
   }
 }
 

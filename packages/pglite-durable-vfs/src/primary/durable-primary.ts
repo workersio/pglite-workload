@@ -27,6 +27,12 @@ import { getPGliteWalInsertLsn } from './native-wal-lsn.js'
 import type { DurablePrimaryWriteLease } from './primary-committer.js'
 import type { CommitSummary, DurablePrimaryStorage } from './primary-storage.js'
 
+const durablePrimaryHook = Symbol('durablePrimaryHook')
+
+type DurablePrimaryQueryHooks = FilesystemQueryHooks & {
+  [durablePrimaryHook]?: true
+}
+
 export type DurablePrimaryFsMode = 'tracking' | 'lazy'
 
 export interface DurablePrimaryOptions {
@@ -148,15 +154,17 @@ export class DurablePrimaryController {
 export function installDurablePrimaryQueryHooks(
   fs: DurablePrimaryStorage,
 ): void {
-  const previous = fs.queryHooks
+  const previous = fs.queryHooks as DurablePrimaryQueryHooks | undefined
+  if (previous?.[durablePrimaryHook]) return
   const durableHooks = createDurablePrimaryQueryHooks(fs, previous)
+  durableHooks[durablePrimaryHook] = true
   fs.queryHooks = durableHooks
 }
 
 function createDurablePrimaryQueryHooks(
   fs: DurablePrimaryStorage,
   previous?: FilesystemQueryHooks,
-): FilesystemQueryHooks {
+): DurablePrimaryQueryHooks {
   return {
     aroundQuery: async (context, operation) =>
       await runWithDeferredCommit(fs, context, async () => {

@@ -21,6 +21,7 @@ import type {
 import { createPrimaryApp } from '../src/primary/app.js'
 import {
   createDurablePrimary,
+  installDurablePrimaryQueryHooks,
   type DurablePrimary,
 } from '../src/primary/durable-primary.js'
 import {
@@ -133,6 +134,30 @@ describe('DurablePrimary', () => {
       commit: { timelineId: 'tx-demo' },
     })
     expect(pageServer.store.getHead('tx-demo')?.lsn).toBe(tx.commit?.lsn)
+  })
+
+  it('keeps primary VFS hook installation idempotent', async () => {
+    const pageServer = createPageServer({ rootDir: pageServerDir })
+    primary = await createDurablePrimary({
+      dataDir: path.join(rootDir, 'idempotent-hook-pgdata'),
+      timelineId: 'idempotent-hook-demo',
+      pageServerUrl: 'http://pages.local',
+      streamUrl: `${started!.url}/timelines/idempotent-hook-demo`,
+      producerId: 'primary-test',
+      fetch: honoFetch(pageServer.app),
+    })
+
+    installDurablePrimaryQueryHooks(primary.durable.fs)
+    await durableExec(primary, 'CREATE TABLE hook_test (id int primary key)')
+    const insert = await durableQuery<{ id: number }>(
+      primary,
+      'INSERT INTO hook_test VALUES (1) RETURNING id',
+    )
+
+    expect(insert.result.rows).toEqual([{ id: 1 }])
+    expect(pageServer.store.getHead('idempotent-hook-demo')?.lsn).toBe(
+      insert.commit?.lsn,
+    )
   })
 
   it('exposes primary query and status Hono endpoints', async () => {

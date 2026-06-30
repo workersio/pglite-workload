@@ -38,6 +38,7 @@ export interface ReplicaTailerStatus {
 
 export interface ReplicaCatchUpOptions {
   allowRestartWithoutHook?: boolean
+  skipInvalidation?: boolean
   skipAfterApply?: boolean
 }
 
@@ -227,7 +228,7 @@ export class ReplicaTailer {
             `Replica commit at LSN ${entry.manifest.lsn} requires restartReplica callback`,
           )
         }
-      } else {
+      } else if (!options.skipInvalidation) {
         await this.invalidator?.invalidate(entry.manifest)
       }
 
