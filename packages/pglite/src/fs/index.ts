@@ -6,6 +6,9 @@ export {
   BaseFilesystem,
   ERRNO_CODES,
   type Filesystem,
+  type FilesystemQueryContext,
+  type FilesystemQueryHooks,
+  type FilesystemQueryMethod,
   type FsType,
   type FsStats,
 } from './base.js'

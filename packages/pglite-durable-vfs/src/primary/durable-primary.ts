@@ -1,10 +1,9 @@
 import { PGlite } from '@electric-sql/pglite'
+import type { PGliteOptions, Results } from '@electric-sql/pglite'
 import type {
-  PGliteOptions,
-  QueryOptions,
-  Results,
-  Transaction,
-} from '@electric-sql/pglite'
+  FilesystemQueryContext,
+  FilesystemQueryHooks,
+} from '@electric-sql/pglite/basefs'
 
 import { DurableTimeline } from '../durable/timeline-stream.js'
 import {
@@ -36,6 +35,10 @@ export interface DurablePrimaryOptions {
   pageServerUrl: string
   streamUrl: string
   fsMode?: DurablePrimaryFsMode
+  /**
+   * @deprecated A composable VFS cannot replace the user's PGlite instance.
+   * Replica-visible changes are published from filesystem query hooks instead.
+   */
   restartAfterCommit?: boolean
   producerId?: string
   fetch?: typeof fetch
@@ -62,41 +65,35 @@ export interface DurableTransactionResult<T> {
   commit?: CommitSummary
 }
 
-export class DurablePrimary {
-  db: PGlite
+export interface DurablePrimaryExtension {
+  readonly durable: DurablePrimaryController
+}
 
+export type DurablePrimary = PGlite & DurablePrimaryExtension
+
+export class DurablePrimaryController {
   readonly fs: DurablePrimaryStorage
 
   readonly pageServer: PageServerApi
 
   readonly timeline: DurableTimeline
 
-  readonly pgliteOptions?: Omit<PGliteOptions, 'dataDir' | 'fs'>
-
-  restartAfterCommit: boolean
+  #db?: PGlite
+  #closeDb?: () => Promise<void>
+  #resourcesClosed = false
 
   constructor({
-    db,
     fs,
     pageServer,
     timeline,
-    pgliteOptions,
-    restartAfterCommit = true,
   }: {
-    db: PGlite
     fs: DurablePrimaryStorage
     pageServer: PageServerApi
     timeline: DurableTimeline
-    pgliteOptions?: Omit<PGliteOptions, 'dataDir' | 'fs'>
-    restartAfterCommit?: boolean
   }) {
-    this.db = db
     this.fs = fs
     this.pageServer = pageServer
     this.timeline = timeline
-    this.pgliteOptions = pgliteOptions
-    this.restartAfterCommit = restartAfterCommit
-    this.fs.setPgWalLsnReader(() => getPGliteWalInsertLsn(this.db))
   }
 
   get timelineId(): string {
@@ -111,42 +108,29 @@ export class DurablePrimary {
     return this.fs.lastCommit
   }
 
-  async query<T>(
-    sql: string,
-    params?: unknown[],
-    options?: QueryOptions,
-  ): Promise<DurableQueryResult<T>> {
-    const before = this.fs.commitSerial
-    const result = await this.runWithDeferredCommit(
-      () => this.db.query<T>(sql, params, options),
-      { sql, params },
-    )
-    return { result, commit: this.commitAfter(before) }
+  get commitSerial(): number {
+    return this.fs.commitSerial
   }
 
-  async exec(sql: string, options?: QueryOptions): Promise<DurableExecResult> {
-    const before = this.fs.commitSerial
-    const result = await this.runWithDeferredCommit(
-      () => this.db.exec(sql, options),
-      { sql },
-    )
-    return { result, commit: this.commitAfter(before) }
+  attachDb(db: PGlite): void {
+    this.#db = db
+    this.#closeDb = db.close.bind(db)
+    this.fs.setPgWalLsnReader(() => getPGliteWalInsertLsn(db))
+    installDurablePrimaryQueryHooks(this.fs)
   }
 
-  async transaction<T>(
-    callback: (tx: Transaction) => Promise<T>,
-  ): Promise<DurableTransactionResult<T>> {
-    const before = this.fs.commitSerial
-    const result = await this.runWithDeferredCommit(async () => {
-      const transactionResult = await this.db.transaction(callback)
-      await this.db.syncToFs()
-      return transactionResult
-    })
-    return { result, commit: this.commitAfter(before) }
+  commitAfter(serial: number): CommitSummary | undefined {
+    return this.fs.commitSerial > serial ? this.fs.lastCommit : undefined
   }
 
   async close(): Promise<void> {
-    if (!this.db.closed) await this.db.close()
+    if (this.#db && !this.#db.closed) await this.#closeDb?.()
+    await this.closeResources()
+  }
+
+  async closeResources(): Promise<void> {
+    if (this.#resourcesClosed) return
+    this.#resourcesClosed = true
     if (this.fs instanceof LazyPrimaryFS) {
       await closePageResolver(this.fs.resolver)
     }
@@ -159,50 +143,55 @@ export class DurablePrimary {
       lastCommit: this.lastCommit,
     }
   }
+}
 
-  private commitAfter(serial: number): CommitSummary | undefined {
-    return this.fs.commitSerial > serial ? this.fs.lastCommit : undefined
-  }
+export function installDurablePrimaryQueryHooks(
+  fs: DurablePrimaryStorage,
+): void {
+  const previous = fs.queryHooks
+  const durableHooks = createDurablePrimaryQueryHooks(fs, previous)
+  fs.queryHooks = durableHooks
+}
 
-  private async runWithDeferredCommit<T>(
-    callback: () => Promise<T>,
-    logicalStatement?: { sql: string; params?: unknown[] },
-  ): Promise<T> {
-    this.fs.beginCommitDeferral()
-    let succeeded = false
-    try {
-      const result = await callback()
-      if (this.fs.hasUnpublishedChanges()) {
-        if (logicalStatement) this.fs.recordLogicalStatement(logicalStatement)
-        await this.db.exec('CHECKPOINT')
-      }
-      succeeded = true
-      return result
-    } finally {
-      this.fs.endCommitDeferral()
-      if (succeeded) {
-        const beforeFlush = this.fs.commitSerial
-        await this.fs.flushDeferredCommit()
-        if (this.restartAfterCommit && this.fs.commitSerial > beforeFlush) {
-          await this.restartAfterCleanShutdown()
+function createDurablePrimaryQueryHooks(
+  fs: DurablePrimaryStorage,
+  previous?: FilesystemQueryHooks,
+): FilesystemQueryHooks {
+  return {
+    aroundQuery: async (context, operation) =>
+      await runWithDeferredCommit(fs, context, async () => {
+        if (previous?.aroundQuery) {
+          return await previous.aroundQuery(context, operation)
         }
-      }
-    }
+        return await operation()
+      }),
   }
+}
 
-  private async restartAfterCleanShutdown(): Promise<void> {
-    await this.db.close()
-    await this.fs.syncToFs()
-    this.fs.beginCommitDeferral()
-    try {
-      this.db = await PGlite.create({
-        ...this.pgliteOptions,
-        fs: this.fs,
-      })
-    } finally {
-      this.fs.endCommitDeferral()
-      this.fs.discardDeferredCommit()
+async function runWithDeferredCommit<T>(
+  fs: DurablePrimaryStorage,
+  context: FilesystemQueryContext,
+  callback: () => Promise<T>,
+): Promise<T> {
+  fs.beginCommitDeferral()
+  let succeeded = false
+  try {
+    const result = await callback()
+    if (context.method === 'transaction') await context.syncToFs()
+    if (fs.hasUnpublishedChanges()) {
+      if (context.sql) {
+        fs.recordLogicalStatement({
+          sql: context.sql,
+          params: context.params,
+        })
+      }
+      await context.exec('CHECKPOINT')
     }
+    succeeded = true
+    return result
+  } finally {
+    fs.endCommitDeferral()
+    if (succeeded) await fs.flushDeferredCommit()
   }
 }
 
@@ -215,6 +204,17 @@ export interface DurablePrimaryStatus {
 export async function createDurablePrimary(
   options: DurablePrimaryOptions,
 ): Promise<DurablePrimary> {
+  const durable = await createDurablePrimaryFs(options)
+  const db = await PGlite.create({
+    ...options.pgliteOptions,
+    fs: durable.fs,
+  })
+  return attachDurablePrimary(db, durable)
+}
+
+export async function createDurablePrimaryFs(
+  options: DurablePrimaryOptions,
+): Promise<DurablePrimaryController> {
   const pageServer = new PageServerHttpClient({
     baseUrl: options.pageServerUrl,
     fetch: options.fetch,
@@ -235,19 +235,27 @@ export async function createDurablePrimary(
           journalDir: options.journalDir,
           writeLease: options.writeLease,
         })
-  const db = await PGlite.create({
-    ...options.pgliteOptions,
-    fs,
-  })
-
-  return new DurablePrimary({
-    db,
+  return new DurablePrimaryController({
     fs,
     pageServer,
     timeline,
-    pgliteOptions: options.pgliteOptions,
-    restartAfterCommit: options.restartAfterCommit,
   })
+}
+
+export function attachDurablePrimary<T extends PGlite>(
+  db: T,
+  durable: DurablePrimaryController,
+): T & DurablePrimaryExtension {
+  durable.attachDb(db)
+  const closeDb = db.close.bind(db)
+  db.close = async () => {
+    try {
+      if (!db.closed) await closeDb()
+    } finally {
+      await durable.closeResources()
+    }
+  }
+  return Object.assign(db, { durable })
 }
 
 async function createLazyPrimaryFs(

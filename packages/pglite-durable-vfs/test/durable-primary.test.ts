@@ -2,6 +2,8 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
+import { PGlite } from '@electric-sql/pglite'
+import type { Results, Transaction } from '@electric-sql/pglite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { DurableTimeline } from '../src/durable/timeline-stream.js'
@@ -18,10 +20,13 @@ import type {
 } from '../src/pageserver/types.js'
 import { createPrimaryApp } from '../src/primary/app.js'
 import {
-  DurablePrimary,
   createDurablePrimary,
+  type DurablePrimary,
 } from '../src/primary/durable-primary.js'
-import { DurablePrimaryFS } from '../src/primary/durable-primary-fs.js'
+import {
+  DurablePrimaryFS,
+  type CommitSummary,
+} from '../src/primary/durable-primary-fs.js'
 import { LazyPrimaryFS } from '../src/primary/lazy-primary-fs.js'
 import { ReplicaPageIndex } from '../src/replica/page-index.js'
 import { DiskPageResolver } from '../src/replica/page-resolver.js'
@@ -67,10 +72,14 @@ describe('DurablePrimary', () => {
       fetch: honoFetch(pageServer.app),
     })
 
-    const create = await primary.exec(
+    expect(primary).toBeInstanceOf(PGlite)
+
+    const create = await durableExec(
+      primary,
       'CREATE TABLE test (id int primary key, value text)',
     )
-    const insert = await primary.query<{ value: string }>(
+    const insert = await durableQuery<{ value: string }>(
+      primary,
       "INSERT INTO test VALUES (1, 'one') RETURNING value",
     )
 
@@ -80,14 +89,16 @@ describe('DurablePrimary', () => {
       timelineId: 'demo',
     })
     expect(insert.commit?.previousLsn).toBeDefined()
-    expect(insert.commit?.previousLsn).not.toBe(create.commit?.lsn)
+    expect(insert.commit?.previousLsn).toBe(create.commit?.lsn)
     expect(
-      pageServer.store.getCommit('demo', insert.commit!.previousLsn!)
+      pageServer.store.getCommit('demo', insert.commit!.lsn)
         ?.logicalStatements?.[0]?.sql,
     ).toContain('INSERT INTO test')
     expect(pageServer.store.getHead('demo')?.lsn).toBe(insert.commit?.lsn)
 
-    const streamRead = await primary.timeline.readCommitEvents({ offset: '-1' })
+    const streamRead = await primary.durable.timeline.readCommitEvents({
+      offset: '-1',
+    })
     const event = streamRead.events.find(
       (commit) =>
         commit.commitId === insert.commit?.lsn ||
@@ -110,9 +121,9 @@ describe('DurablePrimary', () => {
       producerId: 'primary-test',
       fetch: honoFetch(pageServer.app),
     })
-    await primary.exec('CREATE TABLE tx_test (id int primary key)')
+    await durableExec(primary, 'CREATE TABLE tx_test (id int primary key)')
 
-    const tx = await primary.transaction(async (transaction) => {
+    const tx = await durableTransaction(primary, async (transaction) => {
       await transaction.query('INSERT INTO tx_test VALUES (1)')
       return 'committed'
     })
@@ -134,7 +145,7 @@ describe('DurablePrimary', () => {
       producerId: 'primary-test',
       fetch: honoFetch(pageServer.app),
     })
-    await primary.exec('CREATE TABLE api_test (value text)')
+    await durableExec(primary, 'CREATE TABLE api_test (value text)')
     const app = createPrimaryApp({ primary })
 
     const response = await app.request('/v1/primary/query', {
@@ -306,12 +317,13 @@ describe('DurablePrimary', () => {
       streamUrl: `${started!.url}/timelines/lazy-primary-demo`,
       producerId: 'primary-seed',
       fetch,
-      restartAfterCommit: false,
     })
-    await primary.exec(
+    await durableExec(
+      primary,
       'CREATE TABLE lazy_test (id int primary key, value text)',
     )
-    const seed = await primary.query<{ value: string }>(
+    const seed = await durableQuery<{ value: string }>(
+      primary,
       "INSERT INTO lazy_test VALUES (1, 'seed') RETURNING value",
     )
     await primary.close()
@@ -326,19 +338,19 @@ describe('DurablePrimary', () => {
       producerId: 'primary-lazy',
       fetch,
       fsMode: 'lazy',
-      restartAfterCommit: false,
     })
 
     const read = await primary.query<{ value: string }>(
       'SELECT value FROM lazy_test ORDER BY id',
     )
-    const beforeInsertLsn = primary.currentLsn
-    const inserted = await primary.query<{ value: string }>(
+    const beforeInsertLsn = primary.durable.currentLsn
+    const inserted = await durableQuery<{ value: string }>(
+      primary,
       "INSERT INTO lazy_test VALUES (2, 'lazy') RETURNING value",
     )
 
     expect(seed.commit?.lsn).toBeDefined()
-    expect(read.result.rows).toEqual([{ value: 'seed' }])
+    expect(read.rows).toEqual([{ value: 'seed' }])
     expect(inserted.result.rows).toEqual([{ value: 'lazy' }])
     expect(inserted.commit?.previousLsn).toBe(beforeInsertLsn)
     expect(pageServer.store.getHead('lazy-primary-demo')?.lsn).toBe(
@@ -405,6 +417,43 @@ describe('DurablePrimary', () => {
     await recovered.closeFs()
   })
 })
+
+async function durableQuery<T>(
+  primary: DurablePrimary,
+  sql: string,
+  params?: unknown[],
+): Promise<{ result: Results<T>; commit?: CommitSummary }> {
+  const before = primary.durable.commitSerial
+  const result = await primary.query<T>(sql, params)
+  return {
+    result,
+    commit: primary.durable.commitAfter(before),
+  }
+}
+
+async function durableExec(
+  primary: DurablePrimary,
+  sql: string,
+): Promise<{ result: Results[]; commit?: CommitSummary }> {
+  const before = primary.durable.commitSerial
+  const result = await primary.exec(sql)
+  return {
+    result,
+    commit: primary.durable.commitAfter(before),
+  }
+}
+
+async function durableTransaction<T>(
+  primary: DurablePrimary,
+  callback: (transaction: Transaction) => Promise<T>,
+): Promise<{ result: T; commit?: CommitSummary }> {
+  const before = primary.durable.commitSerial
+  const result = await primary.transaction(callback)
+  return {
+    result,
+    commit: primary.durable.commitAfter(before),
+  }
+}
 
 function honoFetch(
   app: ReturnType<typeof createPageServer>['app'],

@@ -112,10 +112,11 @@ export async function createDurableVfsDemo({
       inserted_at timestamptz NOT NULL DEFAULT now()
     )
   `)
-  const seed = await primary.query<{ id: string }>(
-    "INSERT INTO demo_events (payload) VALUES ('seed') RETURNING id",
+  const seed = await runPrimaryImmediately(() =>
+    primary.query<{ id: string }>(
+      "INSERT INTO demo_events (payload) VALUES ('seed') RETURNING id",
+    ),
   )
-  primary.restartAfterCommit = false
 
   const replica = await createDurableReplica({
     dataDir: path.join(resolvedRootDir, 'replica'),
@@ -127,8 +128,9 @@ export async function createDurableVfsDemo({
     pageServerRootDir: pageServerDir,
     autoCatchUp: true,
   })
-  await replica.startLive()
-  await replica.query('SELECT 1', undefined, { waitForLsn: seed.commit?.lsn })
+  await replica.durable.startLive()
+  if (seed.commit?.lsn) await replica.durable.waitForLsn(seed.commit.lsn)
+  await replica.query('SELECT 1')
 
   let replicaPaused = false
   let writesActive = autoStartWrites
@@ -189,7 +191,7 @@ export async function createDurableVfsDemo({
          LIMIT $1`,
         [limit],
       )
-      return context.json({ rows: rows.result.rows, status: rows.status })
+      return context.json({ rows: rows.rows, status: replica.durable.status() })
     } catch (error) {
       return jsonError(context, error)
     }
@@ -235,7 +237,9 @@ export async function createDurableVfsDemo({
     }
   })
 
-  app.get('/v1/primary/status', (context) => context.json(primary.status()))
+  app.get('/v1/primary/status', (context) =>
+    context.json(primary.durable.status()),
+  )
 
   app.post('/v1/replicas/:replicaId/query', async (context) => {
     const replicaRoute = assertReplicaRoute(context.req.param('replicaId'))
@@ -255,7 +259,8 @@ export async function createDurableVfsDemo({
           parseReplicaWaitTimeout(body.waitTimeoutMs),
         )
       }
-      return context.json(await replica.query(body.sql, body.params))
+      const result = await replica.query(body.sql, body.params)
+      return context.json({ result, status: replica.durable.status() })
     } catch (error) {
       return jsonError(context, error)
     }
@@ -276,7 +281,8 @@ export async function createDurableVfsDemo({
           parseReplicaWaitTimeout(body.waitTimeoutMs),
         )
       }
-      return context.json(await replica.exec(body.sql))
+      const result = await replica.exec(body.sql)
+      return context.json({ result, status: replica.durable.status() })
     } catch (error) {
       return jsonError(context, error)
     }
@@ -292,7 +298,7 @@ export async function createDurableVfsDemo({
     }
     try {
       await waitForReplicaLsn(body.lsn, parseReplicaWaitTimeout(body.timeoutMs))
-      return context.json({ status: replica.status() })
+      return context.json({ status: replica.durable.status() })
     } catch (error) {
       return jsonError(context, error)
     }
@@ -302,12 +308,12 @@ export async function createDurableVfsDemo({
     const replicaRoute = assertReplicaRoute(context.req.param('replicaId'))
     if (replicaRoute) return context.json(replicaRoute, 404)
 
-    replica.stopLive()
+    replica.durable.stopLive()
     replicaPaused = true
     return context.json({
       replicaId,
       paused: replicaPaused,
-      status: replica.status(),
+      status: replica.durable.status(),
     })
   })
 
@@ -320,7 +326,7 @@ export async function createDurableVfsDemo({
       return context.json({
         replicaId,
         paused: replicaPaused,
-        status: replica.status(),
+        status: replica.durable.status(),
       })
     } catch (error) {
       return jsonError(context, error)
@@ -334,7 +340,7 @@ export async function createDurableVfsDemo({
     return context.json({
       replicaId,
       paused: replicaPaused,
-      status: replica.status(),
+      status: replica.durable.status(),
     })
   })
 
@@ -454,10 +460,26 @@ export async function createDurableVfsDemo({
     }
   }
 
-  async function runPrimary<T>(callback: () => Promise<T>): Promise<T> {
-    const run = primaryQueue.then(callback, callback)
+  async function runPrimary<T>(
+    callback: () => Promise<T>,
+  ): Promise<{ result: T; commit?: CommitSummary }> {
+    const run = primaryQueue.then(
+      () => runPrimaryImmediately(callback),
+      () => runPrimaryImmediately(callback),
+    )
     primaryQueue = run.catch(() => undefined)
     return await run
+  }
+
+  async function runPrimaryImmediately<T>(
+    callback: () => Promise<T>,
+  ): Promise<{ result: T; commit?: CommitSummary }> {
+    const before = primary.durable.commitSerial
+    const result = await callback()
+    return {
+      result,
+      commit: primary.durable.commitAfter(before),
+    }
   }
 
   async function rememberPrimaryResult<T extends { commit?: CommitSummary }>(
@@ -491,8 +513,8 @@ export async function createDurableVfsDemo({
   }
 
   async function resumeReplica(): Promise<void> {
-    await replica.catchUpOnce()
-    await replica.startLive()
+    await replica.durable.catchUpOnce()
+    await replica.durable.startLive()
     replicaPaused = false
   }
 
@@ -500,7 +522,7 @@ export async function createDurableVfsDemo({
     lsn: string,
     timeoutMs = DEFAULT_REPLICA_WAIT_TIMEOUT_MS,
   ): Promise<void> {
-    const appliedLsn = replica.status().appliedLsn
+    const appliedLsn = replica.durable.status().appliedLsn
     if (appliedLsn && compareLsn(appliedLsn, lsn) >= 0) return
     if (replicaPaused) {
       throw new HttpError('Replica is paused', 409)
@@ -513,7 +535,7 @@ export async function createDurableVfsDemo({
       )
     }, timeoutMs)
     try {
-      await replica.tailer.waitForLsn(lsn, { signal: controller.signal })
+      await replica.durable.waitForLsn(lsn, { signal: controller.signal })
     } finally {
       clearTimeout(timer)
     }
@@ -526,8 +548,8 @@ export async function createDurableVfsDemo({
       ),
       replica.query<{ count: string }>('SELECT count(*) FROM demo_events'),
     ])
-    const primaryStatus = primary.status()
-    const replicaStatus = replica.status()
+    const primaryStatus = primary.durable.status()
+    const replicaStatus = replica.durable.status()
     return {
       rootDir: resolvedRootDir,
       timelineId,
@@ -548,7 +570,7 @@ export async function createDurableVfsDemo({
       lag: replicaLag(primaryStatus.currentLsn, replicaStatus.appliedLsn),
       rows: {
         primary: Number.parseInt(primaryRows.result.rows[0]?.count ?? '0', 10),
-        replica: Number.parseInt(replicaRows.result.rows[0]?.count ?? '0', 10),
+        replica: Number.parseInt(replicaRows.rows[0]?.count ?? '0', 10),
       },
     }
   }
@@ -563,7 +585,9 @@ export async function createDurableVfsDemo({
     rows: DemoRow[]
     cache: unknown
   }> {
-    const read = await primary.timeline.readCommitEvents({ offset: '-1' })
+    const read = await primary.durable.timeline.readCommitEvents({
+      offset: '-1',
+    })
     const headLsn = read.events.at(-1)?.lsn
     if (!headLsn) {
       throw new HttpError(`Timeline ${timelineId} has no commits`, 404)
@@ -630,7 +654,7 @@ export async function createDurableVfsDemo({
     if (closed) return
     closed = true
     clearInterval(insertTimer)
-    replica.stopLive()
+    replica.durable.stopLive()
     await replica.close()
     await primary.close()
     await startedStream.stop()

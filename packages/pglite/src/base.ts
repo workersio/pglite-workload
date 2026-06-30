@@ -19,6 +19,10 @@ import type {
   DescribeQueryResult,
   ExecProtocolOptionsStream,
 } from './interface.js'
+import type {
+  FilesystemQueryContext,
+  FilesystemQueryHooks,
+} from './fs/base.js'
 
 import { serialize as serializeProtocol } from '@electric-sql/pg-protocol'
 import {
@@ -41,6 +45,7 @@ export abstract class BasePGlite
 
   // # Private properties:
   #inTransaction = false
+  #queryHookDepth = 0
 
   // # Abstract methods:
 
@@ -122,6 +127,10 @@ export abstract class BasePGlite
   abstract _runExclusiveQuery<T>(fn: () => Promise<T>): Promise<T>
   abstract _runExclusiveTransaction<T>(fn: () => Promise<T>): Promise<T>
 
+  protected get filesystemQueryHooks(): FilesystemQueryHooks | undefined {
+    return undefined
+  }
+
   /**
    * Listen for notifications on a channel
    */
@@ -199,7 +208,10 @@ export abstract class BasePGlite
     // only one query can be executed at a time and not concurrently with a
     // transaction.
     return await this._runExclusiveTransaction(async () => {
-      return await this.#runQuery<T>(query, params, options)
+      return await this.#runWithFilesystemQueryHooks(
+        { method: 'query', sql: query, params },
+        () => this.#runQuery<T>(query, params, options),
+      )
     })
   }
 
@@ -240,7 +252,10 @@ export abstract class BasePGlite
     // only one query can be executed at a time and not concurrently with a
     // transaction.
     return await this._runExclusiveTransaction(async () => {
-      return await this.#runExec(query, options)
+      return await this.#runWithFilesystemQueryHooks(
+        { method: 'exec', sql: query },
+        () => this.#runExec(query, options),
+      )
     })
   }
 
@@ -453,78 +468,111 @@ export abstract class BasePGlite
   async transaction<T>(callback: (tx: Transaction) => Promise<T>): Promise<T> {
     await this._checkReady()
     return await this._runExclusiveTransaction(async () => {
-      await this.#runExec('BEGIN')
-      this.#inTransaction = true
-
-      // Once a transaction is closed, we throw an error if it's used again
-      let closed = false
-      const checkClosed = () => {
-        if (closed) {
-          throw new Error('Transaction is closed')
-        }
-      }
-
-      const tx: Transaction = {
-        query: async <T>(
-          query: string,
-          params?: any[],
-          options?: QueryOptions,
-        ): Promise<Results<T>> => {
-          checkClosed()
-          return await this.#runQuery(query, params, options)
-        },
-        sql: async <T>(
-          sqlStrings: TemplateStringsArray,
-          ...params: any[]
-        ): Promise<Results<T>> => {
-          const { query, params: actualParams } = queryTemplate(
-            sqlStrings,
-            ...params,
-          )
-          return await this.#runQuery(query, actualParams)
-        },
-        exec: async (
-          query: string,
-          options?: QueryOptions,
-        ): Promise<Array<Results>> => {
-          checkClosed()
-          return await this.#runExec(query, options)
-        },
-        rollback: async () => {
-          checkClosed()
-          // Rollback and set the closed flag to prevent further use of this
-          // transaction
-          await this.#runExec('ROLLBACK')
-          closed = true
-        },
-        listen: async (
-          channel: string,
-          callback: (payload: string) => void,
-        ) => {
-          checkClosed()
-          return await this.listen(channel, callback, tx)
-        },
-        get closed() {
-          return closed
-        },
-      }
-
-      try {
-        const result = await callback(tx)
-        if (!closed) {
-          closed = true
-          await this.#runExec('COMMIT')
-        }
-        this.#inTransaction = false
-        return result
-      } catch (e) {
-        if (!closed) {
-          await this.#runExec('ROLLBACK')
-        }
-        this.#inTransaction = false
-        throw e
-      }
+      return await this.#runWithFilesystemQueryHooks(
+        { method: 'transaction' },
+        () => this.#runTransaction(callback),
+      )
     })
+  }
+
+  async #runTransaction<T>(
+    callback: (tx: Transaction) => Promise<T>,
+  ): Promise<T> {
+    await this.#runExec('BEGIN')
+    this.#inTransaction = true
+
+    // Once a transaction is closed, we throw an error if it's used again
+    let closed = false
+    const checkClosed = () => {
+      if (closed) {
+        throw new Error('Transaction is closed')
+      }
+    }
+
+    const tx: Transaction = {
+      query: async <T>(
+        query: string,
+        params?: any[],
+        options?: QueryOptions,
+      ): Promise<Results<T>> => {
+        checkClosed()
+        return await this.#runQuery(query, params, options)
+      },
+      sql: async <T>(
+        sqlStrings: TemplateStringsArray,
+        ...params: any[]
+      ): Promise<Results<T>> => {
+        const { query, params: actualParams } = queryTemplate(
+          sqlStrings,
+          ...params,
+        )
+        return await this.#runQuery(query, actualParams)
+      },
+      exec: async (
+        query: string,
+        options?: QueryOptions,
+      ): Promise<Array<Results>> => {
+        checkClosed()
+        return await this.#runExec(query, options)
+      },
+      rollback: async () => {
+        checkClosed()
+        // Rollback and set the closed flag to prevent further use of this
+        // transaction
+        await this.#runExec('ROLLBACK')
+        closed = true
+      },
+      listen: async (
+        channel: string,
+        callback: (payload: string) => void,
+      ) => {
+        checkClosed()
+        return await this.listen(channel, callback, tx)
+      },
+      get closed() {
+        return closed
+      },
+    }
+
+    try {
+      const result = await callback(tx)
+      if (!closed) {
+        closed = true
+        await this.#runExec('COMMIT')
+      }
+      this.#inTransaction = false
+      return result
+    } catch (e) {
+      if (!closed) {
+        await this.#runExec('ROLLBACK')
+      }
+      this.#inTransaction = false
+      throw e
+    }
+  }
+
+  async #runWithFilesystemQueryHooks<T>(
+    context: Omit<FilesystemQueryContext, 'exec' | 'syncToFs'>,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const hook = this.filesystemQueryHooks?.aroundQuery
+    if (!hook || this.#queryHookDepth > 0) {
+      return await operation()
+    }
+
+    this.#queryHookDepth += 1
+    try {
+      return await hook(
+        {
+          ...context,
+          exec: async (sql) => await this.#runExec(sql),
+          syncToFs: async () => await this.syncToFs(),
+        },
+        operation,
+      )
+    } finally {
+      this.#queryHookDepth -= 1
+    }
   }
 
   /**

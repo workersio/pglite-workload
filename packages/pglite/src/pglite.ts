@@ -5,7 +5,12 @@ import {
   loadExtensionBundle,
   loadExtensions,
 } from './extensionUtils.js'
-import { type Filesystem, loadFs, parseDataDir } from './fs/index.js'
+import {
+  type Filesystem,
+  type FilesystemQueryHooks,
+  loadFs,
+  parseDataDir,
+} from './fs/index.js'
 import { DumpTarCompressionOptions, loadTar } from './fs/tarUtils.js'
 import type {
   DebugLevel,
@@ -84,6 +89,12 @@ export class PGlite
 
   get ENV(): any {
     return this.mod?.ENV
+  }
+
+  protected override get filesystemQueryHooks():
+    | FilesystemQueryHooks
+    | undefined {
+    return this.fs?.queryHooks
   }
 
   readonly dataDir?: string

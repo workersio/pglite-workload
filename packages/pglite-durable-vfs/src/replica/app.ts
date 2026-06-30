@@ -29,10 +29,10 @@ export function createReplicaApp({ replica }: ReplicaAppOptions): Hono {
       )
     }
     try {
+      if (body.waitForLsn) await replica.durable.waitForLsn(body.waitForLsn)
+      const result = await replica.query(body.sql, body.params)
       return context.json(
-        await replica.query(body.sql, body.params, {
-          waitForLsn: body.waitForLsn,
-        }),
+        { result, status: replica.durable.status() },
       )
     } catch (error) {
       return context.json({ error: errorMessage(error) }, 500)
@@ -45,8 +45,10 @@ export function createReplicaApp({ replica }: ReplicaAppOptions): Hono {
       return context.json({ error: 'Expected { sql, waitForLsn? }' }, 400)
     }
     try {
+      if (body.waitForLsn) await replica.durable.waitForLsn(body.waitForLsn)
+      const result = await replica.exec(body.sql)
       return context.json(
-        await replica.exec(body.sql, { waitForLsn: body.waitForLsn }),
+        { result, status: replica.durable.status() },
       )
     } catch (error) {
       return context.json({ error: errorMessage(error) }, 500)
@@ -55,13 +57,15 @@ export function createReplicaApp({ replica }: ReplicaAppOptions): Hono {
 
   app.post('/v1/replica/catch-up', async (context) => {
     try {
-      return context.json(await replica.catchUpOnce())
+      return context.json(await replica.durable.catchUpOnce())
     } catch (error) {
       return context.json({ error: errorMessage(error) }, 500)
     }
   })
 
-  app.get('/v1/replica/status', (context) => context.json(replica.status()))
+  app.get('/v1/replica/status', (context) =>
+    context.json(replica.durable.status()),
+  )
 
   return app
 }

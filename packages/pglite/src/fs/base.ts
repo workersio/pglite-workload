@@ -5,12 +5,35 @@ import { PGDATA } from '../initdb.js'
 
 export type FsType = 'nodefs' | 'idbfs' | 'memoryfs' | 'opfs-ahp'
 
+export type FilesystemQueryMethod = 'query' | 'exec' | 'transaction'
+
+export interface FilesystemQueryContext {
+  method: FilesystemQueryMethod
+  sql?: string
+  params?: unknown[]
+  exec(sql: string): Promise<unknown>
+  syncToFs(): Promise<void>
+}
+
+export interface FilesystemQueryHooks {
+  aroundQuery?<T>(
+    context: FilesystemQueryContext,
+    operation: () => Promise<T>,
+  ): Promise<T>
+}
+
 /**
  * Filesystem interface.
  * All virtual filesystems that are compatible with PGlite must implement
  * this interface.
  */
 export interface Filesystem {
+  /**
+   * Optional lifecycle hooks for VFS implementations that need to coordinate
+   * with public query execution.
+   */
+  queryHooks?: FilesystemQueryHooks
+
   /**
    * Initiate the filesystem and return the options to pass to the emscripten module.
    */

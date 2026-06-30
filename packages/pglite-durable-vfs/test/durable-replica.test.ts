@@ -2,6 +2,8 @@ import * as nodeFs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
+import { PGlite } from '@electric-sql/pglite'
+import type { Results } from '@electric-sql/pglite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -13,7 +15,11 @@ import { isDurableTimelinePath } from '../src/fs/path-classifier.js'
 import { createPageServer } from '../src/pageserver/app.js'
 import { PageServerHttpClient } from '../src/pageserver/client.js'
 import { DiskCommitStore } from '../src/pageserver/commit-store.js'
-import { createDurablePrimary } from '../src/primary/durable-primary.js'
+import {
+  createDurablePrimary,
+  type DurablePrimary,
+} from '../src/primary/durable-primary.js'
+import type { CommitSummary } from '../src/primary/durable-primary-fs.js'
 import { createReplicaApp } from '../src/replica/app.js'
 import {
   createDurableReplica,
@@ -366,10 +372,14 @@ describe('durable replica phase 5', () => {
         producerId: 'primary-native-no-restart',
         fetch,
       })
-      await primary.exec(
+      await durablePrimaryExec(
+        primary,
         'CREATE TABLE native_no_restart (id int primary key, value text)',
       )
-      await primary.query("INSERT INTO native_no_restart VALUES (1, 'one')")
+      await durablePrimaryQuery(
+        primary,
+        "INSERT INTO native_no_restart VALUES (1, 'one')",
+      )
 
       replica = await createDurableReplica({
         dataDir: path.join(rootDir, 'native-no-restart-pgdata'),
@@ -381,10 +391,11 @@ describe('durable replica phase 5', () => {
         pageServerRootDir: pageServerDir,
         autoCatchUp: true,
       })
-      expect(hasPGliteNativeInvalidation(replica.db)).toBe(true)
+      expect(replica).toBeInstanceOf(PGlite)
+      expect(hasPGliteNativeInvalidation(replica)).toBe(true)
 
-      primary.restartAfterCommit = false
-      const insert = await primary.query(
+      const insert = await durablePrimaryQuery(
+        primary,
         "INSERT INTO native_no_restart VALUES (2, 'two')",
       )
       const manifest = pageServer.store.getCommit(
@@ -393,21 +404,20 @@ describe('durable replica phase 5', () => {
       )
       expect(manifest?.replicaApplyMode).toBe('live-invalidate')
 
-      const replaceDb = vi.spyOn(replica, 'replaceDb')
+      const originalReplica = replica
 
-      await replica.catchUpOnce()
+      await replica.durable.catchUpOnce()
       const rows = await replica.query<{ id: number; value: string }>(
         'SELECT id, value FROM native_no_restart ORDER BY id',
-        undefined,
-        { waitForLsn: insert.commit?.lsn },
       )
 
-      expect(rows.result.rows).toEqual([
+      expect(rows.rows).toEqual([
         { id: 1, value: 'one' },
         { id: 2, value: 'two' },
       ])
-      expect(replica.appliedLsn).toBe(insert.commit?.lsn)
-      expect(replaceDb).not.toHaveBeenCalled()
+      expect(replica.durable.appliedLsn).toBe(insert.commit?.lsn)
+      expect(replica).toBe(originalReplica)
+      expect(replica.closed).toBe(false)
     } finally {
       await replica?.close()
       await primary?.close()
@@ -501,14 +511,17 @@ describe('durable replica phase 5', () => {
         producerId: 'primary-e2e',
         fetch,
       })
-      await primary.exec(
+      await durablePrimaryExec(
+        primary,
         'CREATE TABLE e2e_test (id int primary key, value text)',
       )
-      const insert = await primary.query<{ value: string }>(
+      const insert = await durablePrimaryQuery<{ value: string }>(
+        primary,
         "INSERT INTO e2e_test VALUES (1, 'one') RETURNING value",
       )
+      expect(insert.result.rows).toEqual([{ value: 'one' }])
 
-      const streamRead = await primary.timeline.readCommitEvents({
+      const streamRead = await primary.durable.timeline.readCommitEvents({
         offset: '-1',
       })
       const manifests = streamRead.events.map((event) =>
@@ -537,22 +550,19 @@ describe('durable replica phase 5', () => {
 
       const direct = await replica.query<{ id: number; value: string }>(
         'SELECT id, value FROM e2e_test ORDER BY id',
-        undefined,
-        { waitForLsn: insert.commit?.lsn },
       )
-      expect(direct.result.rows).toEqual([{ id: 1, value: 'one' }])
+      expect(direct.rows).toEqual([{ id: 1, value: 'one' }])
 
-      const secondInsert = await primary.query<{ value: string }>(
+      const secondInsert = await durablePrimaryQuery<{ value: string }>(
+        primary,
         "INSERT INTO e2e_test VALUES (2, 'two') RETURNING value",
       )
-      await replica.catchUpOnce()
+      await replica.durable.catchUpOnce()
 
       const afterLiveApply = await replica.query<{ id: number; value: string }>(
         'SELECT id, value FROM e2e_test ORDER BY id',
-        undefined,
-        { waitForLsn: secondInsert.commit?.lsn },
       )
-      expect(afterLiveApply.result.rows).toEqual([
+      expect(afterLiveApply.rows).toEqual([
         { id: 1, value: 'one' },
         { id: 2, value: 'two' },
       ])
@@ -579,6 +589,31 @@ describe('durable replica phase 5', () => {
     }
   })
 })
+
+async function durablePrimaryQuery<T = { [key: string]: unknown }>(
+  primary: DurablePrimary,
+  sql: string,
+  params?: unknown[],
+): Promise<{ result: Results<T>; commit?: CommitSummary }> {
+  const before = primary.durable.commitSerial
+  const result = await primary.query<T>(sql, params)
+  return {
+    result,
+    commit: primary.durable.commitAfter(before),
+  }
+}
+
+async function durablePrimaryExec(
+  primary: DurablePrimary,
+  sql: string,
+): Promise<{ result: Results[]; commit?: CommitSummary }> {
+  const before = primary.durable.commitSerial
+  const result = await primary.exec(sql)
+  return {
+    result,
+    commit: primary.durable.commitAfter(before),
+  }
+}
 
 function commitPage(
   store: DiskCommitStore,

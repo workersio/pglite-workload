@@ -5,6 +5,7 @@ import * as path from 'node:path'
 import {
   BaseFilesystem,
   ERRNO_CODES,
+  type FilesystemQueryHooks,
   type FsStats,
 } from '@electric-sql/pglite/basefs'
 
@@ -27,6 +28,7 @@ export interface LazyReplicaFSOptions {
   pageSize?: number
   debug?: boolean
   allowLocalWrite?: (filePath: string) => boolean
+  queryHooks?: FilesystemQueryHooks
 }
 
 export interface LazyReplicaCacheStats {
@@ -52,6 +54,8 @@ export class LazyReplicaFS extends BaseFilesystem {
 
   readonly allowLocalWrite: (filePath: string) => boolean
 
+  queryHooks?: FilesystemQueryHooks
+
   #appliedLsn?: string
   #allowRecoveryWrites = false
   #fdPaths = new Map<number, string>()
@@ -75,6 +79,7 @@ export class LazyReplicaFS extends BaseFilesystem {
     this.#appliedLsn = options.appliedLsn
     this.pageSize = options.pageSize ?? PAGE_SIZE
     this.allowLocalWrite = options.allowLocalWrite ?? defaultAllowLocalWrite
+    this.queryHooks = options.queryHooks
     mkdirSync(this.rootDir, { recursive: true })
     this.ensureLocalRuntimeDirectories()
   }

@@ -1,8 +1,13 @@
 export { TrackingNodeFS } from './fs/tracking-node-fs.js'
 export {
-  DurablePrimary,
+  DurablePrimaryController,
+  attachDurablePrimary,
   createDurablePrimary,
+  createDurablePrimaryFs,
+  installDurablePrimaryQueryHooks,
   type DurableExecResult,
+  type DurablePrimary,
+  type DurablePrimaryExtension,
   type DurablePrimaryFsMode,
   type DurablePrimaryOptions,
   type DurablePrimaryStatus,
@@ -24,9 +29,13 @@ export {
 export { getPGliteWalInsertLsn } from './primary/native-wal-lsn.js'
 export { createPrimaryApp } from './primary/app.js'
 export {
-  DurableReplica,
+  DurableReplicaController,
+  attachDurableReplica,
   createDurableReplica,
+  installReplicaQueryGate,
   type DurableReplicaExecResult,
+  type DurableReplica,
+  type DurableReplicaExtension,
   type DurableReplicaOptions,
   type DurableReplicaQueryOptions,
   type DurableReplicaQueryResult,

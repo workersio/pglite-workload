@@ -984,7 +984,11 @@ cache, not the Durable Streams transport format.
 
 ### 5. Primary API
 
-The primary package API should make the demo easy:
+The primary package API should make the demo easy without wrapping the PGlite
+query surface. `createDurablePrimary()` returns a real `PGlite` instance with a
+small `.durable` control plane attached. Code that spies on or extends a PGlite
+instance should continue to see normal `query`, `exec`, `transaction`, and
+extension methods.
 
 ```ts
 const primary = await createDurablePrimary({
@@ -1000,17 +1004,22 @@ const result = await primary.query(
   ["hello"],
 )
 
-console.log(result.commitLsn)
+console.log(result.rows)
+console.log(primary.durable.lastCommit?.lsn)
 ```
 
-Recommended wrapper result:
+The HTTP API can adapt the normal PGlite result into `{ result, commit }`
+responses by checking the durable commit serial before and after the query:
 
 ```ts
-interface DurableQueryResult<T> {
-  result: Results<T>
-  commit?: CommitSummary
-}
+const before = primary.durable.commitSerial
+const result = await primary.query(sql, params)
+const commit = primary.durable.commitAfter(before)
+```
 
+The durable control plane exposes status and commit metadata:
+
+```ts
 interface CommitSummary {
   timelineId: string
   lsn: string
@@ -1022,8 +1031,12 @@ interface CommitSummary {
 }
 ```
 
-The wrapper can delegate to a normal `PGlite` instance with either primary
-filesystem mode:
+The implementation is VFS-first. PGlite exposes a filesystem query hook, and
+the durable primary installs an `aroundQuery` hook after PGlite startup. The
+hook defers filesystem publication while a public query or transaction runs,
+runs `CHECKPOINT` after successful mutations, then flushes the commit before the
+PGlite call resolves. The startup delay matters because PGlite internal init
+queries should not be published as user commits.
 
 ```ts
 const fs =
@@ -1031,10 +1044,12 @@ const fs =
     ? new LazyPrimaryFS(dataDir, replicationOptions)
     : new TrackingNodeFS(dataDir, replicationOptions)
 const db = new PGlite({ fs })
+attachDurablePrimary(db, durablePrimaryController)
 ```
 
-The filesystem should remember the last commit summary so the wrapper can
-return it after `query()` or `exec()`.
+The filesystem remembers the last commit summary so callers can inspect it
+through `db.durable.lastCommit` or derive per-query commit metadata using
+`commitAfter()`.
 
 For the first demo, default `fsMode` to `"tracking"`. The API should reserve
 `"lazy"` from the start so the primary can later use the same on-demand
@@ -1395,7 +1410,9 @@ Mapping caveats:
 
 #### Replica API
 
-Replica API:
+Replica API should also preserve the normal PGlite query surface. The helper
+returns `PGlite & { durable }`; the `.durable` control plane owns catch-up,
+live tailing, LSN waits, and status.
 
 ```ts
 const replica = await createDurableReplica({
@@ -1407,10 +1424,18 @@ const replica = await createDurableReplica({
   lazy: true,
 })
 
-await replica.start()
-await replica.waitForLsn("0/0000002A")
+await replica.durable.startLive()
+await replica.durable.waitForLsn("0/0000002A")
 const result = await replica.query("select count(*) from events")
+console.log(result.rows)
 ```
+
+The replica VFS installs an `aroundQuery` hook that enters the
+`ReplicaQueryGate` for every public PGlite query, exec, or transaction. The
+tailer can keep reading Durable Stream events while queries run, but apply,
+buffer invalidation, and visible-LSN advancement wait for the gate to become
+idle. That keeps direct PGlite calls and HTTP endpoints on the same snapshot
+boundary.
 
 Demo Hono API:
 
@@ -2268,16 +2293,18 @@ Replica startup local-write smoke test:
 - Tail commit events with `DurableStream.stream({ json: true })` and
   `subscribeJson()`.
 
-### Phase 4: primary wrapper
+### Phase 4: composable primary VFS
 
-- Create `createDurablePrimary`.
+- Create `createDurablePrimary` returning `PGlite & { durable }`.
+- Add a PGlite filesystem `aroundQuery` hook so VFS implementations can defer
+  and flush work around public `query`, `exec`, and `transaction` calls.
 - Wire `TrackingNodeFS.syncToFs()` to pageserver and Durable Stream.
 - Write the pending commit journal before clearing or moving dirty state.
 - Preserve/retry dirty generations if publish fails.
-- Expose last commit summary.
+- Expose last commit summary via `db.durable`.
 - Add a primary query Hono endpoint.
-- Patch or wrap PGlite transaction commit flushing before exposing transactions
-  through the demo API.
+- Flush transaction writes from the VFS hook before the PGlite transaction call
+  resolves.
 
 ### Phase 5: lazy replica and invalidation
 
@@ -2289,6 +2316,8 @@ Replica startup local-write smoke test:
 - Implement tailer that updates indexes without fetching page bytes.
 - Implement replica apply journal and idempotent replay.
 - Implement `waitForLsn`.
+- Install a VFS `aroundQuery` hook that routes public PGlite queries through
+  `ReplicaQueryGate` so WAL tail application waits for active queries.
 - Add PGlite/Postgres native invalidation export for relation buffers,
   smgr/file-size state, and broad system caches.
 - Call invalidation before advancing `appliedLsn`.

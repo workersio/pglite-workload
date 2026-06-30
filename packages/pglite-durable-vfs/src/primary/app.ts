@@ -1,6 +1,10 @@
 import { Hono } from 'hono'
 
-import type { DurablePrimary } from './durable-primary.js'
+import type {
+  DurableExecResult,
+  DurablePrimary,
+  DurableQueryResult,
+} from './durable-primary.js'
 
 export interface PrimaryAppOptions {
   primary: DurablePrimary
@@ -24,7 +28,12 @@ export function createPrimaryApp({ primary }: PrimaryAppOptions): Hono {
       return context.json({ error: 'Expected { sql, params? }' }, 400)
     }
     try {
-      return context.json(await primary.query(body.sql, body.params))
+      const before = primary.durable.commitSerial
+      const result = await primary.query(body.sql, body.params)
+      return context.json({
+        result,
+        commit: primary.durable.commitAfter(before),
+      } satisfies DurableQueryResult<unknown>)
     } catch (error) {
       return context.json({ error: errorMessage(error) }, 500)
     }
@@ -36,13 +45,20 @@ export function createPrimaryApp({ primary }: PrimaryAppOptions): Hono {
       return context.json({ error: 'Expected { sql }' }, 400)
     }
     try {
-      return context.json(await primary.exec(body.sql))
+      const before = primary.durable.commitSerial
+      const result = await primary.exec(body.sql)
+      return context.json({
+        result,
+        commit: primary.durable.commitAfter(before),
+      } satisfies DurableExecResult)
     } catch (error) {
       return context.json({ error: errorMessage(error) }, 500)
     }
   })
 
-  app.get('/v1/primary/status', (context) => context.json(primary.status()))
+  app.get('/v1/primary/status', (context) =>
+    context.json(primary.durable.status()),
+  )
 
   return app
 }

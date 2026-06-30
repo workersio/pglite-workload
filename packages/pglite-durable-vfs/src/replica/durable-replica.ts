@@ -1,16 +1,10 @@
-import * as path from 'node:path'
-
 import { PGlite } from '@electric-sql/pglite'
-import type {
-  PGliteOptions,
-  QueryOptions,
-  Results,
-  Transaction,
-} from '@electric-sql/pglite'
+import type { PGliteOptions, QueryOptions, Results } from '@electric-sql/pglite'
+import type { FilesystemQueryHooks } from '@electric-sql/pglite/basefs'
 
 import { DurableTimeline } from '../durable/timeline-stream.js'
 import { PageServerHttpClient } from '../pageserver/client.js'
-import type { CommitManifest, LogicalStatement } from '../pageserver/types.js'
+import type { CommitManifest } from '../pageserver/types.js'
 import {
   closePageResolver,
   DiskPageResolver,
@@ -71,8 +65,17 @@ export interface DurableReplicaStatus extends ReplicaTailerStatus {
   cache: LazyReplicaCacheStats
 }
 
-export class DurableReplica {
-  db: PGlite
+export interface DurableReplicaExtension {
+  readonly durable: DurableReplicaController
+}
+
+export type DurableReplica = PGlite & DurableReplicaExtension
+
+export class DurableReplicaController {
+  #db?: PGlite
+  #closeDb?: () => Promise<void>
+  #resourcesClosed = false
+
   fs: LazyReplicaFS
   readonly tailer: ReplicaTailer
   readonly queryGate: ReplicaQueryGate
@@ -88,7 +91,8 @@ export class DurableReplica {
     tailer: ReplicaTailer
     queryGate: ReplicaQueryGate
   }) {
-    this.db = db
+    this.#db = db
+    this.#closeDb = db.close.bind(db)
     this.fs = fs
     this.tailer = tailer
     this.queryGate = queryGate
@@ -98,46 +102,15 @@ export class DurableReplica {
     return this.fs.appliedLsn
   }
 
-  replaceDb(db: PGlite): void {
-    this.db = db
-  }
-
   replaceFs(fs: LazyReplicaFS): void {
     this.fs = fs
   }
 
-  async query<T>(
-    sql: string,
-    params?: unknown[],
-    options: DurableReplicaQueryOptions = {},
-  ): Promise<DurableReplicaQueryResult<T>> {
-    if (options.waitForLsn) await this.tailer.waitForLsn(options.waitForLsn)
-    const result = await this.queryGate.runQuery(async () =>
-      this.db.query<T>(sql, params, options.queryOptions),
-    )
-    return { result, status: this.status() }
-  }
-
-  async exec(
-    sql: string,
-    options: DurableReplicaQueryOptions = {},
-  ): Promise<DurableReplicaExecResult> {
-    if (options.waitForLsn) await this.tailer.waitForLsn(options.waitForLsn)
-    const result = await this.queryGate.runQuery(async () =>
-      this.db.exec(sql, options.queryOptions),
-    )
-    return { result, status: this.status() }
-  }
-
-  async transaction<T>(
-    callback: (tx: Transaction) => Promise<T>,
-    options: { waitForLsn?: string } = {},
-  ): Promise<DurableReplicaTransactionResult<T>> {
-    if (options.waitForLsn) await this.tailer.waitForLsn(options.waitForLsn)
-    const result = await this.queryGate.runQuery(async () =>
-      this.db.transaction(callback),
-    )
-    return { result, status: this.status() }
+  async waitForLsn(
+    lsn: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<void> {
+    await this.tailer.waitForLsn(lsn, options)
   }
 
   async catchUpOnce(): Promise<DurableReplicaStatus> {
@@ -154,8 +127,14 @@ export class DurableReplica {
   }
 
   async close(): Promise<void> {
+    if (this.#db && !this.#db.closed) await this.#closeDb?.()
+    await this.closeResources()
+  }
+
+  async closeResources(): Promise<void> {
+    if (this.#resourcesClosed) return
+    this.#resourcesClosed = true
     this.tailer.stop()
-    if (!this.db.closed) await this.db.close()
     await closePageResolver(this.fs.resolver)
   }
 
@@ -191,73 +170,14 @@ export async function createDurableReplica(
     options.journalDir ?? `${options.dataDir}.durable/replica`,
   )
   const queryGate = new ReplicaQueryGate()
-  let fsGeneration = 0
-  const createReplicaFs = (previous?: LazyReplicaFS): LazyReplicaFS =>
-    new LazyReplicaFS(replicaCacheRoot(options.dataDir, fsGeneration), {
-      timelineId: options.timelineId,
-      resolver,
-      index: previous?.index,
-      appliedLsn: previous?.appliedLsn,
-    })
-  let fs = createReplicaFs()
+  const queryHooks = createReplicaQueryHooks(queryGate)
+  const fs = new LazyReplicaFS(options.dataDir, {
+    timelineId: options.timelineId,
+    resolver,
+    queryHooks,
+  })
   let db: PGlite | undefined
-  const replicaRef: { current?: DurableReplica } = {}
-  const logicalStatements: LogicalStatement[] = []
   const nativeInvalidator = new PGliteNativeInvalidator(() => db)
-
-  const openDb = async ({
-    closeExisting,
-    replaceFs,
-  }: {
-    closeExisting: boolean
-    replaceFs?: boolean
-  }) => {
-    if (closeExisting && db && !db.closed) {
-      fs.setRecoveryWrites(true)
-      try {
-        await db.close()
-      } finally {
-        fs.setRecoveryWrites(false)
-      }
-    }
-
-    if (replaceFs) {
-      fsGeneration += 1
-      fs = createReplicaFs(fs)
-      tailer.replaceFs(fs)
-      replicaRef.current?.replaceFs(fs)
-    }
-
-    fs.prepareForRecovery({ resetLocalCache: closeExisting })
-    fs.setRecoveryWrites(true)
-    try {
-      db = await PGlite.create({
-        ...options.pgliteOptions,
-        fs,
-      })
-      replicaRef.current?.replaceDb(db)
-      return db
-    } finally {
-      fs.setRecoveryWrites(false)
-    }
-  }
-
-  const restartAfterApply =
-    options.invalidator === undefined
-      ? async (manifest: CommitManifest) => {
-          if (
-            manifest.replicaApplyMode === 'live-invalidate' &&
-            nativeInvalidator.didHandle(manifest)
-          ) {
-            return
-          }
-          if (manifest.logicalStatements) {
-            logicalStatements.push(...manifest.logicalStatements)
-          }
-          await openDb({ closeExisting: true, replaceFs: true })
-          await replayLogicalStatements(db!, fs, logicalStatements)
-        }
-      : undefined
 
   const tailer = new ReplicaTailer({
     fs,
@@ -266,10 +186,7 @@ export async function createDurableReplica(
     journal,
     queryGate,
     invalidator: options.invalidator ?? nativeInvalidator,
-    afterApply: restartAfterApply,
-    restartReplica:
-      options.restartReplica ??
-      (restartAfterApply ? () => undefined : undefined),
+    restartReplica: options.restartReplica,
   })
 
   if (options.autoCatchUp) {
@@ -279,38 +196,56 @@ export async function createDurableReplica(
     })
   }
 
-  db = await openDb({ closeExisting: false })
-
-  const replica = new DurableReplica({ db, fs, tailer, queryGate })
-  replicaRef.current = replica
-  return replica
-}
-
-function replicaCacheRoot(dataDir: string, generation: number): string {
-  if (generation === 0) return dataDir
-  return path.join(`${dataDir}.cache`, `generation-${generation}`)
-}
-
-async function replayLogicalStatements(
-  db: PGlite,
-  fs: LazyReplicaFS,
-  statements: LogicalStatement[],
-): Promise<void> {
-  if (statements.length === 0) return
+  fs.prepareForRecovery()
   fs.setRecoveryWrites(true)
   try {
-    for (const statement of statements) {
-      try {
-        await db.query(statement.sql, statement.params)
-      } catch (error) {
-        if (!isDuplicateKeyError(error)) throw error
-      }
-    }
+    db = await PGlite.create({
+      ...options.pgliteOptions,
+      fs,
+    })
   } finally {
     fs.setRecoveryWrites(false)
   }
+
+  return attachDurableReplica(
+    db,
+    new DurableReplicaController({ db, fs, tailer, queryGate }),
+  )
 }
 
-function isDuplicateKeyError(error: unknown): boolean {
-  return error instanceof Error && error.message.includes('duplicate key')
+export function installReplicaQueryGate(
+  fs: LazyReplicaFS,
+  queryGate: ReplicaQueryGate,
+): void {
+  fs.queryHooks = createReplicaQueryHooks(queryGate, fs.queryHooks)
+}
+
+function createReplicaQueryHooks(
+  queryGate: ReplicaQueryGate,
+  previous?: FilesystemQueryHooks,
+): FilesystemQueryHooks {
+  return {
+    aroundQuery: async (context, operation) =>
+      await queryGate.runQuery(async () => {
+        if (previous?.aroundQuery) {
+          return await previous.aroundQuery(context, operation)
+        }
+        return await operation()
+      }),
+  }
+}
+
+export function attachDurableReplica<T extends PGlite>(
+  db: T,
+  durable: DurableReplicaController,
+): T & DurableReplicaExtension {
+  const closeDb = db.close.bind(db)
+  db.close = async () => {
+    try {
+      if (!db.closed) await closeDb()
+    } finally {
+      await durable.closeResources()
+    }
+  }
+  return Object.assign(db, { durable })
 }
