@@ -20,7 +20,9 @@ import type {
 } from '../src/pageserver/types.js'
 import { createPrimaryApp } from '../src/primary/app.js'
 import {
+  attachDurablePrimary,
   createDurablePrimary,
+  createDurablePrimaryFs,
   installDurablePrimaryQueryHooks,
   type DurablePrimary,
 } from '../src/primary/durable-primary.js'
@@ -158,6 +160,37 @@ describe('DurablePrimary', () => {
     expect(pageServer.store.getHead('idempotent-hook-demo')?.lsn).toBe(
       insert.commit?.lsn,
     )
+  })
+
+  it('publishes commits when manually composed as a PGlite VFS', async () => {
+    const pageServer = createPageServer({ rootDir: pageServerDir })
+    const durable = await createDurablePrimaryFs({
+      dataDir: path.join(rootDir, 'manual-vfs-pgdata'),
+      timelineId: 'manual-vfs-demo',
+      pageServerUrl: 'http://pages.local',
+      streamUrl: `${started!.url}/timelines/manual-vfs-demo`,
+      producerId: 'primary-manual-vfs',
+      fetch: honoFetch(pageServer.app),
+    })
+    const db = await PGlite.create({ fs: durable.fs })
+    primary = attachDurablePrimary(db, durable)
+
+    expect(primary).toBeInstanceOf(PGlite)
+
+    await durableExec(
+      primary,
+      'CREATE TABLE manual_vfs (id int primary key, value text)',
+    )
+    const insert = await durableQuery<{ value: string }>(
+      primary,
+      "INSERT INTO manual_vfs VALUES (1, 'from-vfs') RETURNING value",
+    )
+
+    expect(insert.result.rows).toEqual([{ value: 'from-vfs' }])
+    expect(pageServer.store.getHead('manual-vfs-demo')?.lsn).toBe(
+      insert.commit?.lsn,
+    )
+    expect(primary.durable.currentLsn).toBe(insert.commit?.lsn)
   })
 
   it('exposes primary query and status Hono endpoints', async () => {

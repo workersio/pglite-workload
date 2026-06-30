@@ -4,6 +4,7 @@ import * as path from 'node:path'
 
 import { PGlite } from '@electric-sql/pglite'
 import type { Results } from '@electric-sql/pglite'
+import type { FilesystemQueryHooks } from '@electric-sql/pglite/basefs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -424,6 +425,136 @@ describe('durable replica phase 5', () => {
     }
   })
 
+  it('blocks live apply and invalidation while a replica query is active', async () => {
+    const pageServer = createPageServer({ rootDir: pageServerDir })
+    const fetch = honoFetch(pageServer.app)
+    const invalidator = {
+      invalidate: vi.fn<() => void>(),
+    }
+    let primary: Awaited<ReturnType<typeof createDurablePrimary>> | undefined
+    let replica: DurableReplica | undefined
+
+    try {
+      primary = await createDurablePrimary({
+        dataDir: path.join(rootDir, 'active-query-primary'),
+        timelineId: 'active-query-demo',
+        pageServerUrl: 'http://pages.local',
+        streamUrl: `${started!.url}/timelines/active-query-demo`,
+        producerId: 'primary-active-query',
+        fetch,
+      })
+      await durablePrimaryExec(
+        primary,
+        'CREATE TABLE active_query (id int primary key, value text)',
+      )
+      await durablePrimaryQuery(
+        primary,
+        "INSERT INTO active_query VALUES (1, 'one')",
+      )
+
+      replica = await createDurableReplica({
+        dataDir: path.join(rootDir, 'active-query-replica'),
+        timelineId: 'active-query-demo',
+        pageServerUrl: 'http://pages.local',
+        streamUrl: `${started!.url}/timelines/active-query-demo`,
+        producerId: 'replica-active-query',
+        fetch,
+        pageServerRootDir: pageServerDir,
+        invalidator,
+        autoCatchUp: true,
+      })
+      const initialLsn = replica.durable.appliedLsn
+      const hold = holdReplicaQuery(replica, 'active_query')
+      const activeQuery = replica.query<{ count: number }>(
+        'SELECT count(*)::int AS count FROM active_query',
+      )
+      await hold.entered
+
+      const insert = await durablePrimaryQuery(
+        primary,
+        "INSERT INTO active_query VALUES (2, 'two')",
+      )
+      const catchUp = replica.durable.catchUpOnce()
+
+      await waitFor(() => replica!.durable.tailer.journal.readPending())
+      expect(replica.durable.appliedLsn).toBe(initialLsn)
+      expect(invalidator.invalidate).not.toHaveBeenCalled()
+      expect(await settlesWithin(catchUp, 20)).toBe(false)
+
+      hold.release()
+      await activeQuery
+      await catchUp
+
+      expect(invalidator.invalidate).toHaveBeenCalledTimes(1)
+      expect(replica.durable.appliedLsn).toBe(insert.commit?.lsn)
+      expect(replica.durable.tailer.journal.readPending()).toBeUndefined()
+    } finally {
+      await replica?.close()
+      await primary?.close()
+    }
+  })
+
+  it('fails closed when native invalidation disappears after opening a replica', async () => {
+    const pageServer = createPageServer({ rootDir: pageServerDir })
+    const fetch = honoFetch(pageServer.app)
+    let primary: Awaited<ReturnType<typeof createDurablePrimary>> | undefined
+    let replica: DurableReplica | undefined
+
+    try {
+      primary = await createDurablePrimary({
+        dataDir: path.join(rootDir, 'missing-native-primary'),
+        timelineId: 'missing-native-demo',
+        pageServerUrl: 'http://pages.local',
+        streamUrl: `${started!.url}/timelines/missing-native-demo`,
+        producerId: 'primary-missing-native',
+        fetch,
+      })
+      await durablePrimaryExec(
+        primary,
+        'CREATE TABLE missing_native (id int primary key, value text)',
+      )
+      await durablePrimaryQuery(
+        primary,
+        "INSERT INTO missing_native VALUES (1, 'one')",
+      )
+
+      replica = await createDurableReplica({
+        dataDir: path.join(rootDir, 'missing-native-replica'),
+        timelineId: 'missing-native-demo',
+        pageServerUrl: 'http://pages.local',
+        streamUrl: `${started!.url}/timelines/missing-native-demo`,
+        producerId: 'replica-missing-native',
+        fetch,
+        pageServerRootDir: pageServerDir,
+        autoCatchUp: true,
+      })
+      expect(hasPGliteNativeInvalidation(replica)).toBe(true)
+      const initialLsn = replica.durable.appliedLsn
+      const nativeModule =
+        replica.Module as unknown as NativeInvalidationRuntime
+      const originalInvalidate = nativeModule._pgl_invalidate_remote_pages
+      nativeModule._pgl_invalidate_remote_pages = undefined
+      try {
+        expect(hasPGliteNativeInvalidation(replica)).toBe(false)
+        const insert = await durablePrimaryQuery(
+          primary,
+          "INSERT INTO missing_native VALUES (2, 'two')",
+        )
+
+        await expect(replica.durable.catchUpOnce()).rejects.toThrow(
+          `Native PGlite invalidation hook is unavailable for commit ${insert.commit?.lsn}`,
+        )
+        expect(replica.durable.appliedLsn).toBe(initialLsn)
+        expect(replica.durable.tailer.journal.readPending()).toBeDefined()
+      } finally {
+        nativeModule._pgl_invalidate_remote_pages = originalInvalidate
+      }
+    } finally {
+      await replica?.close()
+      await primary?.close()
+    }
+  })
+
   it('rehydrates the lazy page index from completed journal state after restart', async () => {
     const pageServer = createPageServer({ rootDir: pageServerDir })
     const client = new PageServerHttpClient({
@@ -588,6 +719,64 @@ describe('durable replica phase 5', () => {
       await primary?.close()
     }
   })
+
+  it('does not advance visible replica LSN for live DDL that requires a restart', async () => {
+    const pageServer = createPageServer({ rootDir: pageServerDir })
+    const fetch = honoFetch(pageServer.app)
+    let primary: Awaited<ReturnType<typeof createDurablePrimary>> | undefined
+    let replica: DurableReplica | undefined
+
+    try {
+      primary = await createDurablePrimary({
+        dataDir: path.join(rootDir, 'live-ddl-primary'),
+        timelineId: 'live-ddl-demo',
+        pageServerUrl: 'http://pages.local',
+        streamUrl: `${started!.url}/timelines/live-ddl-demo`,
+        producerId: 'primary-live-ddl',
+        fetch,
+      })
+      await durablePrimaryExec(
+        primary,
+        'CREATE TABLE live_ddl_seed (id int primary key, value text)',
+      )
+      await durablePrimaryQuery(
+        primary,
+        "INSERT INTO live_ddl_seed VALUES (1, 'one')",
+      )
+
+      replica = await createDurableReplica({
+        dataDir: path.join(rootDir, 'live-ddl-replica'),
+        timelineId: 'live-ddl-demo',
+        pageServerUrl: 'http://pages.local',
+        streamUrl: `${started!.url}/timelines/live-ddl-demo`,
+        producerId: 'replica-live-ddl',
+        fetch,
+        pageServerRootDir: pageServerDir,
+        autoCatchUp: true,
+      })
+      const initialLsn = replica.durable.appliedLsn
+      const ddl = await durablePrimaryExec(primary, 'TRUNCATE live_ddl_seed')
+      const manifest = pageServer.store.getCommit(
+        'live-ddl-demo',
+        ddl.commit!.lsn,
+      )
+
+      expect(manifest?.replicaApplyMode).toBe('restart-replica')
+      await expect(replica.durable.catchUpOnce()).rejects.toThrow(
+        'requires restartReplica callback',
+      )
+      expect(replica.durable.appliedLsn).toBe(initialLsn)
+      expect(replica.durable.tailer.journal.readPending()).toBeDefined()
+
+      const rows = await replica.query<{ id: number; value: string }>(
+        'SELECT id, value FROM live_ddl_seed ORDER BY id',
+      )
+      expect(rows.rows).toEqual([{ id: 1, value: 'one' }])
+    } finally {
+      await replica?.close()
+      await primary?.close()
+    }
+  })
 })
 
 async function durablePrimaryQuery<T = { [key: string]: unknown }>(
@@ -721,4 +910,103 @@ function honoFetch(
       body: init?.body,
     })
   }
+}
+
+interface HeldReplicaQuery {
+  entered: Promise<void>
+  release: () => void
+}
+
+function holdReplicaQuery(
+  replica: DurableReplica,
+  sqlFragment: string,
+): HeldReplicaQuery {
+  const previous = replica.durable.fs.queryHooks
+  let enteredResolve: () => void = () => undefined
+  const entered = new Promise<void>((resolve) => {
+    enteredResolve = resolve
+  })
+  let release: () => void = () => undefined
+  const released = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let held = false
+
+  replica.durable.fs.queryHooks = composeQueryHook(
+    previous,
+    async () => {
+      if (!held) {
+        held = true
+        enteredResolve()
+        await released
+      }
+    },
+    sqlFragment,
+  )
+
+  return { entered, release }
+}
+
+function composeQueryHook(
+  previous: FilesystemQueryHooks | undefined,
+  beforeOperation: () => Promise<void>,
+  sqlFragment: string,
+): FilesystemQueryHooks {
+  return {
+    aroundQuery: async (context, operation) => {
+      const next = async () => {
+        if (context.sql?.includes(sqlFragment)) {
+          await beforeOperation()
+        }
+        return await operation()
+      }
+      if (previous?.aroundQuery) {
+        return await previous.aroundQuery(context, next)
+      }
+      return await next()
+    },
+  }
+}
+
+async function waitFor<T>(
+  read: () => T | undefined,
+  timeoutMs = 1_000,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const value = read()
+    if (value !== undefined) return value
+    if (Date.now() > deadline) {
+      throw new Error('Timed out waiting for test condition')
+    }
+    await delay(5)
+  }
+}
+
+async function settlesWithin(
+  promise: Promise<unknown>,
+  timeoutMs: number,
+): Promise<boolean> {
+  return await Promise.race([
+    promise.then(
+      () => true,
+      () => true,
+    ),
+    delay(timeoutMs).then(() => false),
+  ])
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms))
+}
+
+interface NativeInvalidationRuntime {
+  _pgl_invalidate_remote_pages?: (
+    rangesPtr: number,
+    rangesLength: number,
+    invalidateSystemCaches: boolean,
+    invalidateSmgr: boolean,
+    remoteNextXidLow: number,
+    remoteNextXidHigh: number,
+  ) => number
 }
