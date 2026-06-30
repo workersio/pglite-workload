@@ -660,9 +660,13 @@ await testEsmCjsAndDTC(async (importType) => {
         initialMemory: wantedMemSize,
       })
 
-      const instanceMemSize = db.Module.HEAPU8.buffer.byteLength
+      try {
+        const instanceMemSize = db.Module.HEAPU8.buffer.byteLength
 
-      expect(instanceMemSize).toEqual(wantedMemSize)
+        expect(instanceMemSize).toEqual(wantedMemSize)
+      } finally {
+        await db.close()
+      }
     })
 
     it('wasmMemory works', async () => {

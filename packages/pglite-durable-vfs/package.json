@@ -26,11 +26,14 @@
   },
   "scripts": {
     "build": "tsup",
+    "build:bench-worker": "tsup scripts/worker-replica-memory-worker.ts --format esm --platform node --out-dir dist/bench --clean false --sourcemap",
+    "explore:pglite-memory": "node --expose-gc --import tsx scripts/pglite-memory-explore.ts",
+    "bench:worker-replicas": "pnpm build && pnpm build:bench-worker && node --expose-gc --import tsx scripts/worker-replica-memory.ts",
     "demo": "tsx src/demo/server.ts",
-    "lint": "eslint ./src ./test --report-unused-disable-directives --max-warnings 0",
-    "format": "prettier --write ./src ./test",
+    "lint": "eslint ./src ./test ./scripts --report-unused-disable-directives --max-warnings 0",
+    "format": "prettier --write ./src ./test ./scripts",
     "typecheck": "tsc",
-    "stylecheck": "pnpm lint && prettier --check ./src ./test",
+    "stylecheck": "pnpm lint && prettier --check ./src ./test ./scripts",
     "test": "vitest"
   },
   "types": "dist/index.d.ts",

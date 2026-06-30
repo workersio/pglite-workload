@@ -35,6 +35,8 @@ export interface PostgresMod
   _pgl_set_pipe_fn: (pipe_fn: number) => number
   _pgl_freopen: (filepath: number, mode: number, stream: number) => number
   _pgl_pq_flush: () => void
+  _pgl_get_heap_base?: () => number
+  _pgl_get_heap_top?: () => number
   _fopen: (path: number, mode: number) => number
   _fclose: (stream: number) => number
   _fflush: (stream: number) => void
@@ -59,6 +61,10 @@ export interface PostgresMod
   _pgl_startPGlite: () => void
   _pgl_getMyProcPort: () => number
   _pgl_sendConnData: () => void
+  _MemoryContextMemAllocated?: (context: number, recurse: number) => number
+  _TopMemoryContext?: number
+  _CacheMemoryContext?: number
+  _CurrentMemoryContext?: number
   ENV: any
   PGLITE_ENV: any
   _emscripten_force_exit: (status: number) => void
