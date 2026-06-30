@@ -20,6 +20,7 @@ import type {
   Extensions,
   PGliteInterface,
   PGliteInterfaceExtensions,
+  PGliteFsBundle,
   PGliteOptions,
   Transaction,
 } from './interface.js'
@@ -73,6 +74,62 @@ class CurrentQuery {
     this.databaseError =
       opts.databaseError === undefined ? null : opts.databaseError
   }
+}
+
+const readOnlyFsBundlePathPrefixes = [
+  '/pglite/bin/',
+  '/pglite/icu/',
+  '/pglite/lib/',
+  '/pglite/share/',
+]
+const readOnlyFsBundlePaths = new Set(['/pglite/locale-a'])
+
+function loadFsBundleBuffer(
+  fsBundle: PGliteFsBundle | undefined,
+  fsBundleUrl: URL,
+): Promise<ArrayBuffer> {
+  if (!fsBundle) return pglUtils.getFsBundle(fsBundleUrl)
+  if (fsBundle instanceof ArrayBuffer) return Promise.resolve(fsBundle)
+  return fsBundle.arrayBuffer()
+}
+
+function installReadOnlyFsBundleHook(mod: PostgresMod): void {
+  const createDataFile = mod.FS_createDataFile
+  if (!createDataFile) {
+    throw new Error('readOnlyFsBundle requires FS_createDataFile support')
+  }
+
+  mod.FS_createDataFile = (
+    parent: string,
+    name: string | null,
+    fileData: string | ArrayLike<number>,
+    canRead: boolean,
+    canWrite: boolean,
+    canOwn: boolean,
+  ) => {
+    const path = fsBundlePath(parent, name)
+    createDataFile(
+      parent,
+      name,
+      fileData,
+      canRead,
+      isReadOnlyFsBundlePath(path) ? false : canWrite,
+      canOwn,
+    )
+  }
+}
+
+function fsBundlePath(parent: string, name: string | null): string {
+  if (!name) return parent
+  if (parent.endsWith('/')) return `${parent}${name}`
+  return `${parent}/${name}`
+}
+
+function isReadOnlyFsBundlePath(path: string): boolean {
+  return (
+    readOnlyFsBundlePaths.has(path) ||
+    readOnlyFsBundlePathPrefixes.some((prefix) => path.startsWith(prefix))
+  )
 }
 
 export class PGlite
@@ -347,9 +404,10 @@ export class PGlite
     // which is called via `PostgresModFactory` after we have awaited
     // `fsBundleBufferPromise` below.
     const fsBundleUrl = new URL('../release/pglite.data', import.meta.url)
-    const fsBundleBufferPromise = options.fsBundle
-      ? options.fsBundle.arrayBuffer()
-      : pglUtils.getFsBundle(fsBundleUrl)
+    const fsBundleBufferPromise = loadFsBundleBuffer(
+      options.fsBundle,
+      fsBundleUrl,
+    )
     let fsBundleBuffer: ArrayBuffer
     fsBundleBufferPromise.then((buffer) => {
       fsBundleBuffer = buffer
@@ -413,6 +471,15 @@ export class PGlite
         }
         throw new Error(`Unknown package: ${remotePackageName}`)
       },
+      preInit: [
+        ...(options.readOnlyFsBundle
+          ? [
+              () => {
+                installReadOnlyFsBundleHook(emscriptenOpts as PostgresMod)
+              },
+            ]
+          : []),
+      ],
       preRun: [
         (mod: PostgresMod) => {
           mod.onRuntimeInitialized = () => {

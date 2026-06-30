@@ -680,6 +680,21 @@ await testEsmCjsAndDTC(async (importType) => {
       expect(db.Module.HEAPU8.buffer).toBe(memory.buffer)
     })
 
+    it('readOnlyFsBundle makes packaged system files read-only', async () => {
+      await db.close()
+      db = await PGlite.create({ readOnlyFsBundle: true })
+
+      await expect(db.query('SELECT 1 AS value')).resolves.toMatchObject({
+        rows: [{ value: 1 }],
+      })
+      expect(() => {
+        db.Module.FS.writeFile(
+          '/pglite/share/postgresql/postgres.bki',
+          new Uint8Array([0]),
+        )
+      }).toThrow()
+    })
+
     it('shared wasmMemory requires a shared wasm module', async () => {
       await db.close()
       const memory = new WebAssembly.Memory({

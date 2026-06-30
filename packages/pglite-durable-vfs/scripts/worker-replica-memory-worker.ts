@@ -18,6 +18,7 @@ interface ReplicaWorkerData {
   initialMemoryBytes?: number
   startParams?: string[]
   wasmModule?: WebAssembly.Module
+  readOnlyFsBundle?: boolean
 }
 
 type WorkerRequest =
@@ -92,6 +93,7 @@ async function start(): Promise<void> {
       pgliteOptions: {
         initialMemory: data.initialMemoryBytes,
         pgliteWasmModule: data.wasmModule,
+        readOnlyFsBundle: data.readOnlyFsBundle,
         startParams: data.startParams,
       },
     })

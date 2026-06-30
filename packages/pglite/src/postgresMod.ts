@@ -67,6 +67,14 @@ export interface PostgresMod
   _CurrentMemoryContext?: number
   ENV: any
   PGLITE_ENV: any
+  FS_createDataFile?: (
+    parent: string,
+    name: string | null,
+    fileData: string | ArrayLike<number>,
+    canRead: boolean,
+    canWrite: boolean,
+    canOwn: boolean,
+  ) => void
   _emscripten_force_exit: (status: number) => void
   _pgl_run_atexit_funcs: () => void
   _pq_buffer_remaining_data: () => number

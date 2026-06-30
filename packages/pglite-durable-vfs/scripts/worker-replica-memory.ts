@@ -26,6 +26,7 @@ interface BenchmarkOptions {
   initialMemoryMb: number
   workerTimeoutMs: number
   shareWasm: boolean
+  readOnlyFsBundle: boolean
   resolver: ResolverMode
   lowMemoryPostgres: boolean
   verbose: boolean
@@ -46,6 +47,7 @@ interface WorkerInit {
   initialMemoryBytes: number
   startParams?: string[]
   wasmModule?: WebAssembly.Module
+  readOnlyFsBundle: boolean
   verbose: boolean
   timeoutMs: number
 }
@@ -168,6 +170,7 @@ async function main(): Promise<void> {
       producerId: 'worker-replica-bench-primary',
       pgliteOptions: {
         startParams,
+        readOnlyFsBundle: options.readOnlyFsBundle,
       },
     })
     await seedPrimary(primary, options)
@@ -199,6 +202,7 @@ async function main(): Promise<void> {
           initialMemoryBytes,
           startParams,
           wasmModule,
+          readOnlyFsBundle: options.readOnlyFsBundle,
           verbose: options.verbose,
           timeoutMs: options.workerTimeoutMs,
         })
@@ -479,7 +483,7 @@ function printPlan(rootDir: string, opts: BenchmarkOptions): void {
     `replicas=${opts.replicas} step=${opts.step} rows=${opts.rows} payloadBytes=${opts.payloadBytes}`,
   )
   console.log(
-    `resolver=${opts.resolver} shareWasm=${opts.shareWasm} initialMemoryMb=${opts.initialMemoryMb} lowMemoryPostgres=${opts.lowMemoryPostgres}`,
+    `resolver=${opts.resolver} shareWasm=${opts.shareWasm} readOnlyFsBundle=${opts.readOnlyFsBundle} initialMemoryMb=${opts.initialMemoryMb} lowMemoryPostgres=${opts.lowMemoryPostgres}`,
   )
   console.log('')
 }
@@ -524,6 +528,7 @@ function parseOptions(argv: string[]): BenchmarkOptions {
     initialMemoryMb: 128,
     workerTimeoutMs: 120_000,
     shareWasm: true,
+    readOnlyFsBundle: true,
     resolver: 'disk',
     lowMemoryPostgres: false,
     verbose: false,
@@ -595,6 +600,12 @@ function parseOptions(argv: string[]): BenchmarkOptions {
       case '--no-share-wasm':
         opts.shareWasm = false
         break
+      case '--read-only-fs-bundle':
+        opts.readOnlyFsBundle = true
+        break
+      case '--no-read-only-fs-bundle':
+        opts.readOnlyFsBundle = false
+        break
       default:
         throw new Error(`Unknown option ${arg}`)
     }
@@ -621,6 +632,9 @@ Options:
   --settle-ms <n>         Delay before each measurement. Default: 100
   --share-wasm            Compile pglite.wasm once in parent and clone the module. Default
   --no-share-wasm         Let each worker use the package default WASM loading path
+  --read-only-fs-bundle   Mark package data files read-only inside each PGlite. Default
+  --no-read-only-fs-bundle
+                          Leave package data files writable
   --json <path>           Write snapshots as JSON
   --root-dir <path>       Use and keep a specific benchmark directory
   --keep                  Keep temporary benchmark data

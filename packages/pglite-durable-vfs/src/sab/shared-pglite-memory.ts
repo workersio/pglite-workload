@@ -19,7 +19,10 @@ export interface SharedPGliteRuntimeOptions extends SharedPGliteMemoryOptions {
 }
 
 export type SharedPGliteRuntime = Required<
-  Pick<PGliteOptions, 'fsBundle' | 'pgliteWasmModule' | 'wasmMemory'>
+  Pick<
+    PGliteOptions,
+    'fsBundle' | 'pgliteWasmModule' | 'readOnlyFsBundle' | 'wasmMemory'
+  >
 > & {
   pgliteModFactory: SharedPGliteModFactory
 }
@@ -60,11 +63,19 @@ export async function loadSharedPGliteRuntimeOptions({
     loadPGliteModFactory(modulePath),
   ])
   return {
-    fsBundle: new Blob([new Uint8Array(dataBytes)]),
+    fsBundle: arrayBufferFromBuffer(dataBytes),
     pgliteModFactory,
     pgliteWasmModule: await WebAssembly.compile(wasmBytes),
+    readOnlyFsBundle: true,
     wasmMemory: createSharedPGliteMemory({ initialBytes, maximumBytes }),
   }
+}
+
+function arrayBufferFromBuffer(bytes: Buffer): ArrayBuffer {
+  return bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer
 }
 
 async function loadPGliteModFactory(

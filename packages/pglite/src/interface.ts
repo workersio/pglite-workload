@@ -84,6 +84,8 @@ export interface DumpDataDirResult {
   filename: string
 }
 
+export type PGliteFsBundle = Blob | File | ArrayBuffer
+
 export interface PGliteOptions<TExtensions extends Extensions = Extensions> {
   noInitDb?: boolean
   dataDir?: string
@@ -100,7 +102,8 @@ export interface PGliteOptions<TExtensions extends Extensions = Extensions> {
   pgliteWasmModule?: WebAssembly.Module
   pgliteModFactory?: PostgresFactory
   initdbWasmModule?: WebAssembly.Module
-  fsBundle?: Blob | File
+  fsBundle?: PGliteFsBundle
+  readOnlyFsBundle?: boolean
   parsers?: ParserOptions
   serializers?: SerializerOptions
   startParams?: string[]
