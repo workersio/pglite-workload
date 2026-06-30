@@ -19,10 +19,7 @@ import type {
   DescribeQueryResult,
   ExecProtocolOptionsStream,
 } from './interface.js'
-import type {
-  FilesystemQueryContext,
-  FilesystemQueryHooks,
-} from './fs/base.js'
+import type { FilesystemQueryContext, FilesystemQueryHooks } from './fs/base.js'
 
 import { serialize as serializeProtocol } from '@electric-sql/pg-protocol'
 import {
@@ -522,10 +519,7 @@ export abstract class BasePGlite
         await this.#runExec('ROLLBACK')
         closed = true
       },
-      listen: async (
-        channel: string,
-        callback: (payload: string) => void,
-      ) => {
+      listen: async (channel: string, callback: (payload: string) => void) => {
         checkClosed()
         return await this.listen(channel, callback, tx)
       },

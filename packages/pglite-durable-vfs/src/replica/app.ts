@@ -31,9 +31,7 @@ export function createReplicaApp({ replica }: ReplicaAppOptions): Hono {
     try {
       if (body.waitForLsn) await replica.durable.waitForLsn(body.waitForLsn)
       const result = await replica.query(body.sql, body.params)
-      return context.json(
-        { result, status: replica.durable.status() },
-      )
+      return context.json({ result, status: replica.durable.status() })
     } catch (error) {
       return context.json({ error: errorMessage(error) }, 500)
     }
@@ -47,9 +45,7 @@ export function createReplicaApp({ replica }: ReplicaAppOptions): Hono {
     try {
       if (body.waitForLsn) await replica.durable.waitForLsn(body.waitForLsn)
       const result = await replica.exec(body.sql)
-      return context.json(
-        { result, status: replica.durable.status() },
-      )
+      return context.json({ result, status: replica.durable.status() })
     } catch (error) {
       return context.json({ error: errorMessage(error) }, 500)
     }
