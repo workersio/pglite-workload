@@ -73,4 +73,5 @@ No module is in neither state; breadth floor satisfied for this refresh.
 | Key | Severity | Class | Upstream | Status |
 |-----|----------|-------|----------|--------|
 | live-subscriber-isolation | correctness (3) | live-query subscriber teardown | pending dossier | RED confirmed — `unsubscribe(cb)` removes ALL subscribers + tears down state; all 3 variants (query/changes/incrementalQuery). `runs/live-subscriber-isolation-unsub-one.md` |
-| _(2 more source-confirmed candidates in flight: tx-closed-handle, notify-quoted-unlisten)_ | | | | |
+| tx-closed-handle | correctness / data-integrity (3) | tx handle writes after end | pending dossier | RED confirmed — `tx.sql` never guards + `closed` never set on throw; retained handle persists writes on auto-commit after rollback/throw. `runs/tx-closed-handle.md` |
+| _(1 more source-confirmed candidate in flight: notify-quoted-unlisten)_ | | | | |

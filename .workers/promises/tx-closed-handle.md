@@ -16,34 +16,34 @@ explorations:
       Inside a transaction callback tx.query and tx.sql both run; after the
       callback commits, tx.query rejects with "Transaction is closed". Proves
       the oracle observes the guarded path.
-    status: ready
-    result: null
+    status: done
+    result: green
     reason: null
     workload: workloads/tx_closed_handle.mjs
     command: node .workers/workloads/tx_closed_handle.mjs --case baseline
     faults: []
     depth: 6
-    replay: null
+    replay: {harness: local-node, case: baseline, note: "green; FAILs under ORACLE_SELFTEST=1"}
     freshness: new-current
     reported: null
-    published: null
+    published: pending
   - key: tx-closed-handle-sql-after-rollback
     title: tx.sql after rollback must reject
     description: >-
       Retain the tx handle, call tx.rollback(), then invoke tx.sql on it. The
       call must reject with "Transaction is closed"; the write it carries must
       not be persisted to the auto-commit connection.
-    status: ready
-    result: null
+    status: done
+    result: finding
     reason: null
     workload: workloads/tx_closed_handle.mjs
     command: node .workers/workloads/tx_closed_handle.mjs --case sql-after-rollback
     faults: []
     depth: 8
-    replay: null
+    replay: {harness: local-node, case: sql-after-rollback, note: "tx.sql persisted id=99 on auto-commit"}
     freshness: new-current
     reported: null
-    published: null
+    published: pending
   - key: tx-closed-handle-after-throw
     title: Every method rejects after a thrown transaction
     description: >-
@@ -51,17 +51,17 @@ explorations:
       closed=true — so a retained handle's tx.query, tx.exec AND tx.sql all pass
       checkClosed() and run on the auto-commit connection. Assert every retained
       method rejects after a thrown transaction and none of its writes persist.
-    status: ready
-    result: null
+    status: done
+    result: finding
     reason: null
     workload: workloads/tx_closed_handle.mjs
     command: node .workers/workloads/tx_closed_handle.mjs --case after-throw
     faults: []
     depth: 10
-    replay: null
+    replay: {harness: local-node, case: after-throw, note: "query+exec+sql all persisted [96,97,98]; closed never set on throw"}
     freshness: new-current
     reported: null
-    published: null
+    published: pending
   - key: tx-closed-handle-sql-after-commit
     title: tx.sql after commit must reject
     description: >-
