@@ -21,7 +21,7 @@ explorations:
     result: null
     reason: null
     workload: workloads/exec_batch_atomicity.mjs
-    command: node .workers/workloads/exec_batch_atomicity.mjs --case baseline
+    command: sh .workers/workloads/_run.sh .workers/workloads/exec_batch_atomicity.mjs --case baseline
     faults: []
     depth: 6
     replay: null
@@ -40,7 +40,7 @@ explorations:
     result: null
     reason: null
     workload: workloads/exec_batch_atomicity.mjs
-    command: node .workers/workloads/exec_batch_atomicity.mjs --case midfail
+    command: sh .workers/workloads/_run.sh .workers/workloads/exec_batch_atomicity.mjs --case midfail
     faults: []
     depth: 10
     replay: null
@@ -57,7 +57,7 @@ explorations:
     result: null
     reason: null
     workload: workloads/exec_batch_atomicity.mjs
-    command: node .workers/workloads/exec_batch_atomicity.mjs --case recovery
+    command: sh .workers/workloads/_run.sh .workers/workloads/exec_batch_atomicity.mjs --case recovery
     faults: []
     depth: 10
     replay: null

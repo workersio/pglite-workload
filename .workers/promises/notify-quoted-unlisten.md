@@ -21,7 +21,7 @@ explorations:
     result: green
     reason: null
     workload: workloads/notify_quoted_unlisten.mjs
-    command: node .workers/workloads/notify_quoted_unlisten.mjs --case baseline
+    command: sh .workers/workloads/_run.sh .workers/workloads/notify_quoted_unlisten.mjs --case baseline
     faults: []
     depth: 6
     replay: {harness: local-node, case: baseline, note: "green; FAILs under ORACLE_SELFTEST=1"}
@@ -39,7 +39,7 @@ explorations:
     result: finding
     reason: null
     workload: workloads/notify_quoted_unlisten.mjs
-    command: node .workers/workloads/notify_quoted_unlisten.mjs --case quoted
+    command: sh .workers/workloads/_run.sh .workers/workloads/notify_quoted_unlisten.mjs --case quoted
     faults: []
     depth: 8
     replay: {harness: local-node, case: quoted, note: "callback fired after unsubscribe on quoted channel MyChannel"}
@@ -56,7 +56,7 @@ explorations:
     result: null
     reason: null
     workload: workloads/notify_quoted_unlisten.mjs
-    command: node .workers/workloads/notify_quoted_unlisten.mjs --case registry-parity
+    command: sh .workers/workloads/_run.sh .workers/workloads/notify_quoted_unlisten.mjs --case registry-parity
     faults: []
     depth: 8
     replay: null

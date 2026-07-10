@@ -18,7 +18,7 @@ explorations:
     result: green
     reason: null
     workload: workloads/live_subscriber_isolation.mjs
-    command: node .workers/workloads/live_subscriber_isolation.mjs --case baseline
+    command: sh .workers/workloads/_run.sh .workers/workloads/live_subscriber_isolation.mjs --case baseline
     faults: []
     depth: 8
     replay: {harness: local-node, case: baseline, note: "green; also FAILs under ORACLE_SELFTEST=1"}
@@ -35,7 +35,7 @@ explorations:
     result: finding
     reason: null
     workload: workloads/live_subscriber_isolation.mjs
-    command: node .workers/workloads/live_subscriber_isolation.mjs --case unsub-one
+    command: sh .workers/workloads/_run.sh .workers/workloads/live_subscriber_isolation.mjs --case unsub-one
     faults: []
     depth: 12
     replay: {harness: local-node, case: unsub-one, seed: 431957136, note: "deterministic red; not seed-dependent"}
@@ -52,7 +52,7 @@ explorations:
     result: finding
     reason: null
     workload: workloads/live_subscriber_isolation.mjs
-    command: node .workers/workloads/live_subscriber_isolation.mjs --case variants
+    command: sh .workers/workloads/_run.sh .workers/workloads/live_subscriber_isolation.mjs --case variants
     faults: []
     depth: 12
     replay: {harness: local-node, case: variants, note: "both live.changes and live.incrementalQuery red"}

@@ -20,7 +20,7 @@ explorations:
     result: green
     reason: null
     workload: workloads/tx_closed_handle.mjs
-    command: node .workers/workloads/tx_closed_handle.mjs --case baseline
+    command: sh .workers/workloads/_run.sh .workers/workloads/tx_closed_handle.mjs --case baseline
     faults: []
     depth: 6
     replay: {harness: local-node, case: baseline, note: "green; FAILs under ORACLE_SELFTEST=1"}
@@ -37,7 +37,7 @@ explorations:
     result: finding
     reason: null
     workload: workloads/tx_closed_handle.mjs
-    command: node .workers/workloads/tx_closed_handle.mjs --case sql-after-rollback
+    command: sh .workers/workloads/_run.sh .workers/workloads/tx_closed_handle.mjs --case sql-after-rollback
     faults: []
     depth: 8
     replay: {harness: local-node, case: sql-after-rollback, note: "tx.sql persisted id=99 on auto-commit"}
@@ -55,7 +55,7 @@ explorations:
     result: finding
     reason: null
     workload: workloads/tx_closed_handle.mjs
-    command: node .workers/workloads/tx_closed_handle.mjs --case after-throw
+    command: sh .workers/workloads/_run.sh .workers/workloads/tx_closed_handle.mjs --case after-throw
     faults: []
     depth: 10
     replay: {harness: local-node, case: after-throw, note: "query+exec+sql all persisted [96,97,98]; closed never set on throw"}
@@ -71,7 +71,7 @@ explorations:
     result: null
     reason: null
     workload: workloads/tx_closed_handle.mjs
-    command: node .workers/workloads/tx_closed_handle.mjs --case sql-after-commit
+    command: sh .workers/workloads/_run.sh .workers/workloads/tx_closed_handle.mjs --case sql-after-commit
     faults: []
     depth: 8
     replay: null

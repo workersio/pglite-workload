@@ -21,7 +21,7 @@ explorations:
     result: null
     reason: null
     workload: workloads/tx_atomicity_recovery.mjs
-    command: node .workers/workloads/tx_atomicity_recovery.mjs --case baseline
+    command: sh .workers/workloads/_run.sh .workers/workloads/tx_atomicity_recovery.mjs --case baseline
     faults: []
     depth: 8
     replay: null
@@ -39,7 +39,7 @@ explorations:
     result: null
     reason: null
     workload: workloads/tx_atomicity_recovery.mjs
-    command: node .workers/workloads/tx_atomicity_recovery.mjs --case reentrant
+    command: sh .workers/workloads/_run.sh .workers/workloads/tx_atomicity_recovery.mjs --case reentrant
     faults: []
     depth: 10
     replay: null
@@ -56,7 +56,7 @@ explorations:
     result: null
     reason: null
     workload: workloads/tx_atomicity_recovery.mjs
-    command: node .workers/workloads/tx_atomicity_recovery.mjs --case aborted-state
+    command: sh .workers/workloads/_run.sh .workers/workloads/tx_atomicity_recovery.mjs --case aborted-state
     faults: []
     depth: 10
     replay: null

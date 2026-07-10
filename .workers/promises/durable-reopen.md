@@ -20,7 +20,7 @@ explorations:
     result: null
     reason: null
     workload: workloads/durable_reopen.mjs
-    command: node .workers/workloads/durable_reopen.mjs --case baseline
+    command: sh .workers/workloads/_run.sh .workers/workloads/durable_reopen.mjs --case baseline
     faults: []
     depth: 8
     replay: null
@@ -46,7 +46,7 @@ explorations:
       simulate. Needs a host-side write-interception / page-cache-drop fault
       injector before it can produce a real red (else it is an expected-green trap).
     workload: workloads/durable_reopen.mjs
-    command: node .workers/workloads/durable_reopen.mjs --case abrupt-exit
+    command: sh .workers/workloads/_run.sh .workers/workloads/durable_reopen.mjs --case abrupt-exit
     faults: [crash-after-commit]
     depth: 12
     replay: null
@@ -63,7 +63,7 @@ explorations:
     result: null
     reason: null
     workload: workloads/durable_reopen.mjs
-    command: node .workers/workloads/durable_reopen.mjs --case crash-mid-write
+    command: sh .workers/workloads/_run.sh .workers/workloads/durable_reopen.mjs --case crash-mid-write
     faults: [crash-timing-sweep]
     depth: 16
     replay: null

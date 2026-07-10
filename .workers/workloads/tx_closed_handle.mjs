@@ -12,7 +12,8 @@
 // "rejects" oracle (checks a live handle) so the red path is proven.
 
 import { randomBytes } from 'node:crypto'
-import { PGlite } from '../vendor/pglite/dist/index.js'
+const PGLITE_BASE = process.env.PGLITE_BASE || new URL('../vendor/pglite/dist/', import.meta.url).href
+const { PGlite } = await import(new URL('index.js', PGLITE_BASE).href)
 
 const CASE = (() => {
   const i = process.argv.indexOf('--case')
