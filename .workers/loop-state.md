@@ -1,0 +1,11 @@
+# Loop state
+- rails: { loops: 100, workloads: 250 }   # from /goal args or defaults — safety rails, not targets
+- counters: { episodes: 0, producer: 0, executor: 0, workloads: 0 }
+- no-new-info: { streak: 0, K: 5 }
+- in-flight unit: none
+- re-entry: none
+- last-scanned-sha: 1a4cce1ab9ad5e13cbef9072ea005046f153ad9b
+- target-head-sha: 1a4cce1ab9ad5e13cbef9072ea005046f153ad9b
+- re-plan triggers: none
+- publish-pending: []
+- last episode summary: (init)
