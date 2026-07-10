@@ -21,6 +21,36 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
+// Force fully-SYNCHRONOUS WebAssembly instantiation. Even when PGlite is handed
+// a pre-compiled WebAssembly.Module, its loader does `await
+// WebAssembly.instantiate(module, imports)` — the two-arg promise form still
+// resolves via an async task that the deterministic sim services only
+// unreliably (create() completed once but wedged on later runs). `new
+// WebAssembly.Instance(module, imports)` is spec-synchronous with no task at
+// all; wrapping it in a resolved promise keeps the emscripten contract while
+// removing the last event-loop dependency from init. Patched process-wide
+// before any PGlite import so every instantiate call (pglite.wasm + initdb.wasm)
+// takes the sync path.
+{
+  const origInstantiate = WebAssembly.instantiate.bind(WebAssembly)
+  WebAssembly.instantiate = (bufferOrModule, importObject) => {
+    try {
+      const module =
+        bufferOrModule instanceof WebAssembly.Module
+          ? bufferOrModule
+          : new WebAssembly.Module(bufferOrModule) // synchronous compile
+      const instance = new WebAssembly.Instance(module, importObject) // synchronous
+      // Match both result shapes: Module arg → Instance; buffer arg → {instance, module}.
+      return Promise.resolve(
+        bufferOrModule instanceof WebAssembly.Module ? instance : { instance, module },
+      )
+    } catch (e) {
+      // Fall back to the native path if anything about the sync route fails.
+      return origInstantiate(bufferOrModule, importObject)
+    }
+  }
+}
+
 export const PGLITE_BASE =
   process.env.PGLITE_BASE || new URL('../vendor/pglite/dist/', import.meta.url).href
 
