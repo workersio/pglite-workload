@@ -18,9 +18,9 @@
 import { randomBytes } from 'node:crypto'
 // Resolve the pglite dist via PGLITE_BASE (set by _run.sh in the guest);
 // fall back to the local vendored path for direct local runs.
-const PGLITE_BASE = process.env.PGLITE_BASE || new URL('../vendor/pglite/dist/', import.meta.url).href
-const { PGlite } = await import(new URL('index.js', PGLITE_BASE).href)
-const { live } = await import(new URL('live/index.js', PGLITE_BASE).href)
+import { loadPGlite, loadSub } from './_pglite.mjs'
+const { createPGlite } = await loadPGlite()
+const { live } = await loadSub('live/index.js')
 
 const CASE = (() => {
   const i = process.argv.indexOf('--case')
@@ -57,7 +57,7 @@ async function waitFor(predicate, ms = 3000) {
 }
 
 async function main() {
-  const db = await PGlite.create({ extensions: { live } })
+  const db = await createPGlite({ extensions: { live } })
   await db.exec(`CREATE TABLE t (id int primary key, v text);`)
 
   if (CASE === 'baseline') {

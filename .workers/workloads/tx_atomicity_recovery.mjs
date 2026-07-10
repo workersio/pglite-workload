@@ -11,8 +11,8 @@
 // deadline. ORACLE_SELFTEST=1 plants a violation on baseline (a persisted row).
 
 import { randomBytes } from 'node:crypto'
-const PGLITE_BASE = process.env.PGLITE_BASE || new URL('../vendor/pglite/dist/', import.meta.url).href
-const { PGlite } = await import(new URL('index.js', PGLITE_BASE).href)
+import { loadPGlite } from './_pglite.mjs'
+const { createPGlite } = await loadPGlite()
 
 const CASE = (() => {
   const i = process.argv.indexOf('--case')
@@ -37,7 +37,7 @@ const watchdog = setTimeout(() => {
 watchdog.unref()
 
 async function main() {
-  const db = await PGlite.create()
+  const db = await createPGlite()
   await db.exec(`CREATE TABLE t (id int primary key, v text);`)
 
   if (CASE === 'baseline') {
@@ -75,11 +75,21 @@ async function main() {
     } catch { /* we may throw to escape a detected hang */ }
     inv('re1', 'no_reentrant_hang', outcome !== 'timeout',
       `parent-handle query inside tx settled as: ${outcome} (deadline ${RE_DEADLINE}ms)`)
+    // Stronger symptom than a bare deadlock: once the reentrant tx rejects, the
+    // instance livelocks the JS event loop — the macrotask queue is starved, so
+    // no timer (not even a bounded close) can ever fire; only a process kill
+    // recovers. So emit the verdict and exit *synchronously* — any await past
+    // this point is starved and would hang until the sim/wall watchdog reaps it.
+    clearTimeout(watchdog)
+    console.log(failed ? 'RESULT=FAIL' : 'RESULT=PASS')
+    process.exit(failed ? 1 : 0)
   } else {
     console.log(`INVARIANT setup case_unknown FAIL unknown case ${CASE}`)
     failed = true
   }
 
+  // Baseline path: instance is healthy, close normally. (The reentrant case
+  // exits synchronously above — its instance is livelocked and cannot close.)
   await db.close().catch(() => {})
 }
 

@@ -12,8 +12,8 @@
 // oracle is proven able to FAIL.
 
 import { randomBytes } from 'node:crypto'
-const PGLITE_BASE = process.env.PGLITE_BASE || new URL('../vendor/pglite/dist/', import.meta.url).href
-const { PGlite } = await import(new URL('index.js', PGLITE_BASE).href)
+import { loadPGlite } from './_pglite.mjs'
+const { createPGlite } = await loadPGlite()
 
 const CASE = (() => {
   const i = process.argv.indexOf('--case')
@@ -44,7 +44,7 @@ async function settle(ms = 400) {
 }
 
 async function main() {
-  const db = await PGlite.create()
+  const db = await createPGlite()
 
   // listenArg is what the user passes to db.listen; notifyName is the exact
   // (case-sensitive) channel string pg_notify targets.

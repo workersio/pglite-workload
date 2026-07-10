@@ -30,6 +30,22 @@ never bare `node …`. Local runs still work (PGLITE_BASE unset → local vendor
 symlink). `/tmp` is writable in-guest; `/workspace` writability is untested —
 _run.sh avoids it by extracting to /tmp.
 
+## RESOLVED BLOCKER (2026-07-10): PGlite WASM init wedges in the deterministic sim
+**FIX: sync-init shim.** Init wedged on two event-loop-blocked ops the sim does
+not pump: (1) `WebAssembly.instantiate(buffer, imports)` async *compile*, and
+(2) async `fs.readFile` for `pglite.wasm`/`pglite.data`. Both have microtask-only
+alternatives the sim DOES service, reachable via PGlite injection options:
+`pgliteWasmModule` + `initdbWasmModule` (pre-compiled `new WebAssembly.Module(bytes)`)
+and `fsBundle` (a `Blob`, skips `getFsBundle`'s async read). Factored into
+`.workers/workloads/_pglite.mjs` (`loadPGlite()` → `createPGlite(opts)`); every
+workload must create the DB through it, never bare `PGlite.create()`.
+
+**Proof:** `probe_init_sync.mjs` official run `01KX5ZJDFVD51Y1QBJTCAFE4WM`
+(exploration `nd752z7qrew5vktsdy0dznandn8a85g1`, HEAD 4393d42) → `state: succeeded`,
+`INVARIANT probe pglite_init_sync PASS created+queried+closed`, exit 0, at
+vtime ~976s. NOT a wio product bug — no escalation to formal needed.
+
+### (historical) original blocker analysis
 ## OPEN BLOCKER: PGlite WASM init wedges in the deterministic sim
 After the import fix, every guest run reaches `SEED=`/`CASE=` (printed before
 `PGlite.create()`) and then **wedges** — the liveness watchdog fires at 20s and

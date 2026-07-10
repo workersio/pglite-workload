@@ -12,8 +12,8 @@
 // "rejects" oracle (checks a live handle) so the red path is proven.
 
 import { randomBytes } from 'node:crypto'
-const PGLITE_BASE = process.env.PGLITE_BASE || new URL('../vendor/pglite/dist/', import.meta.url).href
-const { PGlite } = await import(new URL('index.js', PGLITE_BASE).href)
+import { loadPGlite } from './_pglite.mjs'
+const { createPGlite } = await loadPGlite()
 
 const CASE = (() => {
   const i = process.argv.indexOf('--case')
@@ -42,7 +42,7 @@ async function rejects(thunk) {
 }
 
 async function main() {
-  const db = await PGlite.create()
+  const db = await createPGlite()
   await db.exec(`CREATE TABLE t (id int primary key, v text);`)
 
   if (CASE === 'baseline') {
