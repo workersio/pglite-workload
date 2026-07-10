@@ -57,6 +57,11 @@ def officials():
                 "key": exploration["key"],
                 "command": exploration["command"],
                 "depth": exploration["depth"],
+                # PGlite's sync-init shim compiles a 10 MB WASM module + a 6 MB
+                # FS bundle per run, so officials need headroom above wio's
+                # 1024 MiB default (proven at 2048). Per-exploration overridable.
+                "mem": exploration.get("mem", 2048),
+                "timeout": exploration.get("timeout", 120),
             }
 
 
@@ -150,10 +155,12 @@ def main() -> None:
             "--command", entry["command"],
             "--exploration", entry["key"],
             "--depth", str(entry["depth"]),
+            "--mem", str(entry["mem"]),
+            "--timeout", str(entry["timeout"]),
             "--format", "json",
             PROJECT_ID,
         ]
-        print(f"{entry['key']} (depth {entry['depth']}): {entry['command']}")
+        print(f"{entry['key']} (depth {entry['depth']}, mem {entry['mem']}): {entry['command']}")
         if dry_run:
             print(f"  would run: {' '.join(argv)}")
             continue
