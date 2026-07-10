@@ -47,11 +47,14 @@ watchdog.unref()
 
 // Wait until `predicate()` is true or a bounded deadline elapses. Returns true
 // if satisfied. This is a per-step deadline strictly under the watchdog.
-async function waitFor(predicate, ms = 3000) {
-  const start = Date.now()
-  while (Date.now() - start < ms) {
+async function waitFor(predicate, turns = 5000) {
+  // Drain MICROTASKS (not setTimeout) between checks. Live-query delivery rides
+  // PGlite's queueMicrotask notification path (pglite.ts:1105); and in the
+  // deterministic sim the LISTEN/NOTIFY path starves the macrotask queue, so a
+  // setTimeout-based wait never fires (BLOCKER #2). Bounded turns → no hang.
+  for (let i = 0; i < turns; i++) {
     if (predicate()) return true
-    await new Promise((r) => setTimeout(r, 25))
+    await Promise.resolve()
   }
   return predicate()
 }

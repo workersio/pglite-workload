@@ -37,10 +37,13 @@ const watchdog = setTimeout(() => {
 }, WATCHDOG_MS)
 watchdog.unref()
 
-async function settle(ms = 400) {
-  // Let queued notification microtasks/callbacks run.
-  const start = Date.now()
-  while (Date.now() - start < ms) await new Promise((r) => setTimeout(r, 25))
+async function settle(turns = 500) {
+  // Let queued notification callbacks run. PGlite delivers notifications via
+  // queueMicrotask (pglite.ts:1105), so draining MICROTASKS suffices — and it
+  // must: in the deterministic sim the LISTEN/NOTIFY path starves the macrotask
+  // queue, so a setTimeout-based settle never fires (BLOCKER #2). Draining
+  // microtasks delivers the callback with no timer. Bounded, so no hang.
+  for (let i = 0; i < turns; i++) await Promise.resolve()
 }
 
 async function main() {
