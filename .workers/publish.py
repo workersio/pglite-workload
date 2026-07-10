@@ -51,6 +51,12 @@ def officials():
         for exploration in front.get("explorations") or []:
             if exploration.get("status") != "done":
                 continue
+            # Some explorations reproduce locally but cannot run in the sim
+            # (BLOCKER #2: LISTEN/NOTIFY + live-query delivery is unserviced by
+            # the deterministic sim). Skip their official runs — publishing a
+            # watchdog-wedge is worse than no guest row; they stand on local repro.
+            if exploration.get("guest") == "blocked":
+                continue
             yield {
                 "spec": spec,
                 "promise": front["key"],
@@ -89,6 +95,34 @@ def record_published(spec: Path, key: str, exploration_id: str) -> None:
 
 PREPARE_TIMEOUT_S = 15 * 60
 POLL_INTERVAL_S = 10
+
+
+TERMINAL_STATES = {
+    "passed", "failed", "timedOut", "completed", "errored", "cancelled", "succeeded"
+}
+
+
+def wait_for_batch(exploration_id: str) -> None:
+    """Block until every workload in a batch reaches a terminal state.
+
+    The worker has a fixed slot count; firing many explorations at once thrashes
+    it (worker_terminated interruptions), so officials publish SERIALLY — each
+    batch drains before the next fires.
+    """
+    deadline = time.monotonic() + PREPARE_TIMEOUT_S
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            [WIO, "simulate", "status", exploration_id, "--format", "json"],
+            capture_output=True, text=True,
+        )
+        try:
+            rows = json.loads(result.stdout)
+        except (json.JSONDecodeError, ValueError):
+            rows = []
+        if rows and all(r.get("state") in TERMINAL_STATES for r in rows):
+            return
+        time.sleep(POLL_INTERVAL_S)
+    print(f"  warning: batch {exploration_id} not terminal after {PREPARE_TIMEOUT_S}s")
 
 
 def git(*args: str) -> str:
@@ -177,7 +211,8 @@ def main() -> None:
                 continue
             raise SystemExit(f"  publish failed:\n{err}")
         entry["published"] = json.loads(result.stdout)["explorationId"]
-        print(f"  published: {entry['published']}")
+        print(f"  published: {entry['published']} — draining before next")
+        wait_for_batch(entry["published"])
 
     # Rewrite `published:` lines only after every publish has fired: the CLI's
     # git gate requires a clean pushed tree, so mutating a spec between

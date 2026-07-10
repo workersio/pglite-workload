@@ -82,6 +82,31 @@ workload must create the DB through it, never bare `PGlite.create()`.
 `INVARIANT probe pglite_init_sync PASS created+queried+closed`, exit 0, at
 vtime ~976s. NOT a wio product bug — no escalation to formal needed.
 
+**PART 2 — sync-instantiate patch (crucial; the sync-init shim ALONE is flaky).**
+probe_init_sync passed once, but `probe_ops.mjs` (create + queries + exec +
+transaction) then wedged at `createPGlite()` itself — `step_create` reached,
+`done_create` never — even with the pre-compiled Module. Cause: PGlite's loader
+does `await WebAssembly.instantiate(module, imports)`; the two-arg PROMISE form
+still resolves via an async task the sim services only unreliably. Fix in
+`_pglite.mjs`: monkeypatch the global `WebAssembly.instantiate` to use
+`new WebAssembly.Instance(module, imports)` (spec-SYNCHRONOUS, no task) wrapped
+in a resolved promise, patched before any PGlite import. With it, `probe_ops`
+official `01KX634A5A36AZG1S5M1ZYQ4WZ` → `state: succeeded`, ALL ops incl.
+`transaction` completed in-guest (vms ~870s = normal init cost, NOT a wedge).
+
+**Guest-time model learned:** the workload's `setTimeout(WATCHDOG).unref()`
+liveness watchdog fires ONLY when the loop goes idle (a true hang) — it does NOT
+track virtualMs (a healthy run reaches vms ~870s without tripping even a 60s
+watchdog). So a `wd liveness_watchdog FAIL` in-guest is a real wedge, not a
+slow-but-fine run. Earlier tx-baseline wedges were flaky init (now fixed), not
+slowness. Also: use `fs.writeSync(1, …)` for guest evidence — an abrupt watchdog
+`process.exit(1)` does not flush Node's block-buffered stdout, dropping
+console.log lines emitted just before a wedge (probe_ops uses writeSync).
+
+**Re-publish discipline:** the 88-workload batch thrashed the 16-slot worker
+(worker_terminated). Publish officials in SMALL batches (≤2 explorations at a
+time), not all at once.
+
 ### (historical) original blocker analysis
 ## OPEN BLOCKER: PGlite WASM init wedges in the deterministic sim
 After the import fix, every guest run reaches `SEED=`/`CASE=` (printed before
