@@ -36,10 +36,14 @@ Static evidence index. Not a queue: no owners, no claims, no priorities.
 - Guest node **v20.15.1**; box node v22. Runs execute the committed git tree at
   `/workspace`; gitignored build.sh output is absent — workloads extract the
   vendored tarball to `/tmp` via `.workers/workloads/_run.sh` (see executor-notes).
-- **OPEN BLOCKER:** `PGlite.create()` wedges in the deterministic sim (emscripten
-  async WASM init never resolves — process idles into the liveness watchdog). All
-  official guest verdicts are blocked; the 3 findings stand on local reproduction.
-  Investigation leads in `runs/executor-notes.md`. Re-plan trigger set.
+- **RESOLVED BLOCKER (2026-07-10):** `PGlite.create()` wedged in the sim on two
+  event-loop-blocked ops (async WASM *compile* + async `fs.readFile`). Fix: the
+  sync-init shim `.workers/workloads/_pglite.mjs` pre-compiles the WASM modules
+  (`pgliteWasmModule`/`initdbWasmModule`) and passes the FS image as an `fsBundle`
+  Blob, forcing microtask-only init the sim services. Proven by `probe_init_sync`
+  (`INVARIANT pglite_init_sync PASS`). Guest verdicts unblocked; every workload
+  must build the DB via `_pglite.mjs`, never bare `PGlite.create()`. Details:
+  `runs/executor-notes.md §RESOLVED BLOCKER`.
 
 ## Areas
 

@@ -30,6 +30,43 @@ never bare `node …`. Local runs still work (PGLITE_BASE unset → local vendor
 symlink). `/tmp` is writable in-guest; `/workspace` writability is untested —
 _run.sh avoids it by extracting to /tmp.
 
+## OPEN BLOCKER #2 (2026-07-10): LISTEN/NOTIFY + live-query setup wedges in the sim
+After the init blocker was resolved, the 10 officials ran with REAL init. The
+tx/query-exec workloads produce clean guest verdicts, but **every notify and
+live-query workload wedges at the 20s liveness watchdog** — including the
+BASELINE (anti-vacuity control), e.g. `live-subscriber-isolation-baseline` and
+`notify-quoted-unlisten-baseline` both `state: failed`, invariant
+`wd liveness_watchdog FAIL body wedged > 20000ms (case=baseline)`.
+
+**Localized:** plain `db.query`/`db.exec` work in-guest (probe + tx-family
+prove it). The hang is at the subscription SETUP await:
+- `await db.listen(channel, cb)` (notify_quoted_unlisten.mjs:57)
+- `await db.live.query(sql, [], cb)` (live_subscriber_isolation.mjs:66)
+The workload's own bounded helpers (`settle()`, `waitFor()`) use `setTimeout`
+polling, which DOES fire in the sim (so they are not the cause; the wedge is
+strictly before them). So PGlite's LISTEN/live subsystem setup depends on an
+async event the deterministic sim does not deliver — same root class as the
+init wedge, but internal to the runtime and NOT bypassable with an injection
+option.
+
+**Impact:** anti-vacuity is broken IN-GUEST for the `notify-quoted-unlisten`
+and `live-subscriber-isolation` promises — their baselines can't go green in
+the sim, so their attack-case guest reds are watchdog-wedges, not trustworthy
+oracle results. **Both findings stand on LOCAL reproduction** (local baseline
+green, selftest red, attack red — solid, deterministic). Only the guest
+*publication* of these two is affected; the tx-family findings are unaffected.
+
+**Next-session leads (cheapest first):**
+1. Coarse MARK-probe around `db.listen()` / `db.live.query()` under a 60s
+   watchdog to confirm setup (not delivery) is the exact hang and time it.
+2. Inspect PGlite's notify/live setup path (`pglite.ts #listen`, `live/index.ts`)
+   for a `MessageChannel`/`setImmediate`/`queueMicrotask` await the sim skips —
+   if it is a `setTimeout(0)` it should fire, so the culprit is a non-timer
+   async primitive.
+3. If unshimmable at the workload level, this is a wio sim-integration gap
+   (the sim must pump PGlite's async event delivery) → candidate escalation to
+   formal, distinct from the (resolved) init blocker.
+
 ## RESOLVED BLOCKER (2026-07-10): PGlite WASM init wedges in the deterministic sim
 **FIX: sync-init shim.** Init wedged on two event-loop-blocked ops the sim does
 not pump: (1) `WebAssembly.instantiate(buffer, imports)` async *compile*, and
