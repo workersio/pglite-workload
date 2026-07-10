@@ -26,7 +26,7 @@ explorations:
     replay: {harness: local-node, case: baseline, note: "green; FAILs under ORACLE_SELFTEST=1"}
     freshness: new-current
     reported: null
-    published: nd7bdt567nfpw91v4rpfwjmh498a9sxt
+    published: nd7erq81fy3qxgcfwnx1r76v0h8a90d5
   - key: tx-closed-handle-sql-after-rollback
     title: tx.sql after rollback must reject
     description: >-
@@ -43,7 +43,7 @@ explorations:
     replay: {harness: local-node, case: sql-after-rollback, note: "tx.sql persisted id=99 on auto-commit"}
     freshness: new-current
     reported: null
-    published: nd7d0xm52n6qg02tw961s79e4s8a89xe
+    published: nd717g68xesk4t7kzmqfp7ad8s8a92cf
   - key: tx-closed-handle-after-throw
     title: Every method rejects after a thrown transaction
     description: >-
@@ -61,7 +61,7 @@ explorations:
     replay: {harness: local-node, case: after-throw, note: "query+exec+sql all persisted [96,97,98]; closed never set on throw"}
     freshness: new-current
     reported: null
-    published: nd7ezf7mnhkmv2v6pkwsv5y6ch8a9t7v
+    published: nd7edyksj5n7s8f5657svmhbcd8a9g3a
   - key: tx-closed-handle-sql-after-commit
     title: tx.sql after commit must reject
     description: >-

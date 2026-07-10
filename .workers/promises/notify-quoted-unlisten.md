@@ -27,7 +27,7 @@ explorations:
     replay: {harness: local-node, case: baseline, note: "green; FAILs under ORACLE_SELFTEST=1"}
     freshness: new-current
     reported: null
-    published: nd74y6n5zjfnd056pa5zgajaf18a8ctb
+    published: nd75rmvk0a8kxsydm66te0s4xh8a8z2t
   - key: notify-quoted-unlisten-quoted
     title: Quoted-channel unsubscribe must stop delivery
     description: >-
@@ -45,7 +45,7 @@ explorations:
     replay: {harness: local-node, case: quoted, note: "callback fired after unsubscribe on quoted channel MyChannel"}
     freshness: new-current
     reported: null
-    published: nd7exrcsq348jehptmy7b7rm398a88bd
+    published: nd7fyz7mn9w7mtx4ac0h01xwds8a976j
   - key: notify-quoted-unlisten-registry-parity
     title: JS registry parity with pg_listening_channels
     description: >-
