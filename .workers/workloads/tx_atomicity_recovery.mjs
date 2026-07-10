@@ -60,26 +60,31 @@ async function main() {
       `post-abort query returned ${ok.rows[0].x}`)
   } else if (CASE === 'reentrant') {
     // The common mistake: `await db.query(...)` (parent handle) inside a tx
-    // callback. The transaction holds the non-reentrant mutex, so this can
-    // deadlock. Bound it: if it doesn't settle, that IS the availability bug.
+    // callback. The transaction holds the non-reentrant mutex, so the parent-
+    // handle query queues behind it forever → deadlock.
+    //
+    // Bound the WHOLE transaction from the OUTSIDE against a deadline. We do NOT
+    // rely on the tx rejecting: in the deterministic sim the rollback-after-
+    // throw path itself never completes (the rollback also needs the held
+    // mutex), so an inside-the-callback race would never let `db.transaction`
+    // settle and re1 would never be reached (only the 20s liveness watchdog
+    // fires — a coarser red). Racing the tx promise itself against a 4s timer
+    // gives a precise verdict in both node and the sim, since the timer is a
+    // macrotask that fires while the deadlock is a mere pending promise.
     const RE_DEADLINE = 4000
-    let outcome
-    try {
-      await db.transaction(async () => {
-        outcome = await Promise.race([
-          db.query(`SELECT 1`).then(() => 'resolved', () => 'rejected'),
-          new Promise((r) => setTimeout(() => r('timeout'), RE_DEADLINE)),
-        ])
-        if (outcome === 'timeout') throw new Error('reentrant call did not settle')
-      })
-    } catch { /* we may throw to escape a detected hang */ }
+    const txPromise = db.transaction(async () => {
+      await db.query(`SELECT 1`) // parent handle inside tx → deadlocks here
+    })
+    txPromise.catch(() => {}) // swallow a late rejection; we judge by the race
+    const outcome = await Promise.race([
+      txPromise.then(() => 'resolved', () => 'rejected'),
+      new Promise((r) => setTimeout(() => r('timeout'), RE_DEADLINE)),
+    ])
     inv('re1', 'no_reentrant_hang', outcome !== 'timeout',
       `parent-handle query inside tx settled as: ${outcome} (deadline ${RE_DEADLINE}ms)`)
-    // Stronger symptom than a bare deadlock: once the reentrant tx rejects, the
-    // instance livelocks the JS event loop — the macrotask queue is starved, so
-    // no timer (not even a bounded close) can ever fire; only a process kill
-    // recovers. So emit the verdict and exit *synchronously* — any await past
-    // this point is starved and would hang until the sim/wall watchdog reaps it.
+    // The instance is wedged (and, once the deadlock unwinds, livelocks the JS
+    // event loop — macrotasks starve, so no later timer/close can fire). Emit
+    // the verdict and exit *synchronously*; any await past here is starved.
     clearTimeout(watchdog)
     console.log(failed ? 'RESULT=FAIL' : 'RESULT=PASS')
     process.exit(failed ? 1 : 0)
