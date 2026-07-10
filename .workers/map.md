@@ -34,12 +34,42 @@ Static evidence index. Not a queue: no owners, no claims, no priorities.
 
 ## Areas
 
-| Key | Title | Promises | Status |
-|-----|-------|----------|--------|
-| _(empty — first producer episode fills this)_ | | | |
+| Key | Title | Focus | Status |
+|-----|-------|-------|--------|
+| transactions | Transactions | tx blocks, rollback, atomicity, single-conn state machine | active |
+| live-queries | Live Queries | subscriptions, incremental diffs, subscriber lifecycle | active |
+| durability | Durability & Persistence | acked write survives reopen/crash (memory + nodefs) | active |
+| query-exec | Query & Exec Semantics | multi-statement atomicity, post-error recovery, param/type fidelity | active |
+| concurrency | Concurrency & Teardown | close races, in-flight settling, buffer bounds | active |
+| notify | LISTEN / NOTIFY | delivery to exactly the emit-time listener set | active |
+| snapshot | Snapshot (dump/loadDataDir) | faithful round-trip of DB state | active |
+| extensions | Extensions & Sync | bundled extensions + pglite-sync apply path | active |
+
+## Module reconciliation (breadth floor, 2026-07-10)
+
+`packages/pglite/src/` modules, each inside an area's loci or explicitly parked:
+
+- `base.ts`, `pglite.ts` — transactions / query-exec / concurrency (core).
+- `types.ts`, `errors.ts`, `templating.ts`, `parse.ts` — query-exec.
+- `fs/*` (base, nodefs, memoryfs, index, tarUtils) — durability / snapshot.
+  `fs/idbfs.ts`, `fs/opfs-ahp.ts` — **parked: unreachable-in-guest** (browser
+  backends; no recipe vendored — a browser recipe would unlock them).
+- `live/*` — live-queries. `worker/index.ts` — **parked: needs-harness**
+  (worker-thread RPC; a second concurrency surface, standing candidate).
+- `extensionUtils.ts`, `contrib/` — extensions.
+- `argsParser.ts` — config resolution (start-param parsing); NOT parked — a
+  durability/exec workload must exercise real start-param resolution, not a
+  hard-pinned config (producer.md breadth floor). Tracked under query-exec/durability.
+- `initdb.ts`, `initdbModFactory.ts` — durability (startup/reload path).
+- `index.ts` — **parked: re-exports only**. `interface.ts`, `definitions/` —
+  **parked: type declarations only**. `postgresMod.ts` — **parked: vendored
+  WASM glue**. `polyfills/` — **parked: environment shims**. `utils.ts`,
+  `extensionUtils.ts` helpers — covered transitively.
+
+No module is in neither state; breadth floor satisfied for this refresh.
 
 ## Promoted findings
 
 | Key | Severity | Class | Upstream | Status |
 |-----|----------|-------|----------|--------|
-| _(none yet)_ | | | | |
+| _(none promoted yet — three source-confirmed candidates in flight, awaiting executor RED: live-subscriber-isolation, tx-closed-handle, notify-quoted-unlisten)_ | | | | |
