@@ -45,12 +45,12 @@ Static evidence index. Not a queue: no owners, no claims, no priorities.
   synchronous). Every workload MUST build the DB via `_pglite.mjs`. Proven by
   `probe_ops` (create + queries + exec + transaction all `succeeded` in-guest).
   query/exec/transaction workloads now give clean guest verdicts.
-- **BLOCKER #2: LISTEN/NOTIFY + live-query delivery is unserviced in the sim
-  (OPEN).** `db.listen()` / `db.live.query()` SETUP wedges post-init (baseline
-  included) — NOT workload-shimmable (internal runtime async delivery). So
-  `notify-quoted-unlisten` + `live-subscriber-isolation` are `guest: blocked`
-  and stand on LOCAL reproduction; publish.py skips them. Leads +
-  candidate-escalation in `runs/executor-notes.md §OPEN BLOCKER #2`.
+- **BLOCKER #2: RESOLVED (2026-07-10).** The LISTEN/NOTIFY path starves the sim's
+  MACROTASK queue (timers die) — `db.listen`/`pg_notify` themselves work; only a
+  subsequent `setTimeout` wedges. Fix: notify + live workloads wait via a bounded
+  MICROTASK drain (`await Promise.resolve()`), since delivery is `queueMicrotask`.
+  notify + live baselines now green in-guest; all 4 findings guest-capable.
+  Details: `runs/executor-notes.md §RESOLVED BLOCKER #2`.
 
 ## Areas
 
@@ -92,7 +92,7 @@ No module is in neither state; breadth floor satisfied for this refresh.
 
 | Key | Severity | Class | Upstream | Status |
 |-----|----------|-------|----------|--------|
-| live-subscriber-isolation | correctness (3) | live-query subscriber teardown | pending dossier | RED confirmed (LOCAL; guest:blocked BLOCKER #2) — `unsubscribe(cb)` removes ALL subscribers + tears down state; all 3 variants (query/changes/incrementalQuery). `runs/live-subscriber-isolation-unsub-one.md` |
+| live-subscriber-isolation | correctness (3) | live-query subscriber teardown | pending dossier | RED confirmed (local; guest re-publish in flight after BLOCKER #2 fix) — `unsubscribe(cb)` removes ALL subscribers + tears down state; all 3 variants (query/changes/incrementalQuery). `runs/live-subscriber-isolation-unsub-one.md` |
 | tx-closed-handle | correctness / data-integrity (3) | tx handle writes after end | pending dossier | RED **GUEST-CONFIRMED** — baseline green (6/6), sql-after-rollback (r1/r2) + after-throw (t1-t4) red; `tx.sql` never guards + `closed` never set on throw; retained handle persists writes. `runs/tx-closed-handle.md` |
-| notify-quoted-unlisten | correctness (2) | quoted-channel unsubscribe | pending dossier | RED confirmed (LOCAL; guest:blocked BLOCKER #2) — disposer double-normalizes a quoted channel (toPostgresName not idempotent); callback keeps firing after unsubscribe. `runs/notify-quoted-unlisten.md` |
+| notify-quoted-unlisten | correctness (2) | quoted-channel unsubscribe | pending dossier | RED confirmed (local; guest re-publish in flight after BLOCKER #2 fix) — disposer double-normalizes a quoted channel (toPostgresName not idempotent); callback keeps firing after unsubscribe. `runs/notify-quoted-unlisten.md` |
 | tx-atomicity-recovery | availability (2) | reentrant deadlock | pending dossier | RED **GUEST-CONFIRMED** — baseline green (8/8), reentrant watchdog-red (10/10); parent-handle db.query inside a transaction callback deadlocks the instance (non-reentrant mutex). `runs/tx-atomicity-recovery-reentrant.md` |

@@ -18,7 +18,6 @@ explorations:
       then NOTIFY — the callback must not fire. Proves the oracle observes a
       working unsubscribe on the already-tested path.
     status: done
-    guest: blocked  # BLOCKER #2: LISTEN/NOTIFY delivery unserviced in the sim (db.listen setup wedges); stands on local repro
     result: green
     reason: null
     workload: workloads/notify_quoted_unlisten.mjs
@@ -37,7 +36,6 @@ explorations:
       Source shows the disposer targets the wrong (re-lowercased) name, so the
       listener stays live — expected red.
     status: done
-    guest: blocked  # BLOCKER #2: LISTEN/NOTIFY delivery unserviced in the sim (db.listen setup wedges); stands on local repro
     result: finding
     reason: null
     workload: workloads/notify_quoted_unlisten.mjs

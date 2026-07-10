@@ -30,6 +30,20 @@ never bare `node …`. Local runs still work (PGLITE_BASE unset → local vendor
 symlink). `/tmp` is writable in-guest; `/workspace` writability is untested —
 _run.sh avoids it by extracting to /tmp.
 
+## RESOLVED BLOCKER #2 (2026-07-10): LISTEN/NOTIFY starves the sim's macrotask queue
+**FIX: microtask-drain the delivery wait (no setTimeout).** `probe_listen` (with
+writeSync marks) localized it precisely: `db.listen()` (LISTEN exec) and
+`SELECT pg_notify()` BOTH complete in-guest — the wedge is the *next*
+`setTimeout` (e.g. `settle()`/`waitFor()`), which never fires. The LISTEN/NOTIFY
+path starves the macrotask queue, so timers die, but microtask-based ops
+(queries) still run and notification delivery rides `queueMicrotask`
+(pglite.ts:1105). So replace the settle/waitFor `setTimeout` polling with a
+bounded MICROTASK drain (`for … await Promise.resolve()`). Proven: `probe_listen`
+official succeeded (`deliver fires=1`); notify + live BASELINES then went green
+in-guest (`s0/u1 PASS`, `b1 PASS`). guest:blocked removed; all 4 findings are
+now guest-capable. (Same macrotask-starvation class as the reentrant livelock.)
+
+### (historical) original BLOCKER #2 analysis
 ## OPEN BLOCKER #2 (2026-07-10): LISTEN/NOTIFY + live-query setup wedges in the sim
 After the init blocker was resolved, the 10 officials ran with REAL init. The
 tx/query-exec workloads produce clean guest verdicts, but **every notify and

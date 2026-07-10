@@ -6,17 +6,12 @@
 - re-entry: tx-atomicity-recovery-reentrant → switch — confirmed finding (reentrant deadlock red, baseline green). aborted-state rung stays planned (overlaps exec-recovery). L→5 (red). Remaining ready work (exec-batch reporting, durable baseline) is lower value than resolving the guest-init blocker. Streak reset (finding).
 - last-scanned-sha: 1a4cce1ab9ad5e13cbef9072ea005046f153ad9b
 - target-head-sha: 1a4cce1ab9ad5e13cbef9072ea005046f153ad9b
-- re-plan triggers: >
-    guest-notify-live-blocker (OPEN, BLOCKER #2) — LISTEN/NOTIFY (`db.listen`) and
-    live-query (`db.live.query`) SETUP wedge at the 20s liveness watchdog in the sim,
-    baseline included; anti-vacuity broken in-guest for notify-quoted-unlisten +
-    live-subscriber-isolation. Not workload-shimmable. Leads + escalation path in
-    runs/executor-notes.md §OPEN BLOCKER #2. (init blocker #1 RESOLVED via sync-init shim.)
+- re-plan triggers: []   # BLOCKER #2 RESOLVED 2026-07-10 (episode 9): LISTEN/NOTIFY starves the sim macrotask queue; notify+live wait via microtask drain instead of setTimeout (delivery is queueMicrotask). Baselines green in-guest. All 4 findings guest-capable. (Init blocker #1 also resolved: sync-init shim + sync-instantiate patch.)
 - publish-pending: []   # DONE. 5 tx-family officials published serially at HEAD 0a59e2c, GUEST-VERIFIED (commit 68cfa67): tx-atomicity-recovery-baseline 8/8 succeeded (b1/b2 PASS); tx-atomicity-recovery-reentrant 10/10 failed (wd watchdog-red, case=reentrant); tx-closed-handle-baseline 6/6 succeeded; tx-closed-handle-sql-after-rollback 8/8 failed (r1/r2); tx-closed-handle-after-throw 10/10 failed (t1-t4). notify/live guest:blocked (BLOCKER #2), local-only.
-- FINDINGS (all replayable; guest status noted):
-    1. live-subscriber-isolation — correctness sev3 — unsubscribe(cb) removes ALL subscribers + tears down state (3 variants). runs/live-subscriber-isolation-unsub-one.md — GUEST: blocked (BLOCKER #2), local-only.
+- FINDINGS (all replayable; all guest-capable after BLOCKER #1+#2 fixes):
+    1. live-subscriber-isolation — correctness sev3 — unsubscribe(cb) removes ALL subscribers + tears down state (3 variants). runs/live-subscriber-isolation-unsub-one.md — GUEST baseline green (b1 PASS); attack re-publish in flight.
     2. tx-closed-handle — data-integrity sev3 — retained tx handle writes on auto-commit after rollback/throw (tx.sql unguarded + closed never set on throw). runs/tx-closed-handle.md — GUEST-CONFIRMED (baseline green + sql-after-rollback/after-throw reds).
-    3. notify-quoted-unlisten — correctness sev2 — quoted-channel disposer double-normalizes; callback fires after unsubscribe. runs/notify-quoted-unlisten.md — GUEST: blocked (BLOCKER #2), local-only.
+    3. notify-quoted-unlisten — correctness sev2 — quoted-channel disposer double-normalizes; callback fires after unsubscribe. runs/notify-quoted-unlisten.md — GUEST baseline green (s0/u1 PASS); attack re-publish in flight.
     4. tx-atomicity-recovery — availability sev2 — parent-handle db.query inside a tx deadlocks the instance. runs/tx-atomicity-recovery-reentrant.md — GUEST-CONFIRMED (baseline green + reentrant watchdog-red).
 - last episode summary: >
     Episode 8 (triage #2 → guest execution made RELIABLE + 2 findings guest-confirmed).

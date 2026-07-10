@@ -15,7 +15,6 @@ explorations:
       One subscriber on a live.query; a committed mutation fires its callback
       with the updated result. Proves the oracle observes delivery at all.
     status: done
-    guest: blocked  # BLOCKER #2: live-query delivery unserviced in the sim (db.live.query setup wedges); stands on local repro
     result: green
     reason: null
     workload: workloads/live_subscriber_isolation.mjs
@@ -33,7 +32,6 @@ explorations:
       commit a mutation. The second callback must still fire and the backing
       view/state tables must still exist; the first must not fire.
     status: done
-    guest: blocked  # BLOCKER #2: live-query delivery unserviced in the sim (db.live.query setup wedges); stands on local repro
     result: finding
     reason: null
     workload: workloads/live_subscriber_isolation.mjs
@@ -51,7 +49,6 @@ explorations:
       (the two other subscriber-set copies), asserting incremental state
       (state1/state2, diff prepared statements) is not DEALLOCATEd.
     status: done
-    guest: blocked  # BLOCKER #2: live-query delivery unserviced in the sim (db.live.query setup wedges); stands on local repro
     result: finding
     reason: null
     workload: workloads/live_subscriber_isolation.mjs
