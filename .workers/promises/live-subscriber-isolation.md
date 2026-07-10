@@ -14,51 +14,51 @@ explorations:
     description: >-
       One subscriber on a live.query; a committed mutation fires its callback
       with the updated result. Proves the oracle observes delivery at all.
-    status: ready
-    result: null
+    status: done
+    result: green
     reason: null
     workload: workloads/live_subscriber_isolation.mjs
     command: node .workers/workloads/live_subscriber_isolation.mjs --case baseline
     faults: []
     depth: 8
-    replay: null
+    replay: {harness: local-node, case: baseline, note: "green; also FAILs under ORACLE_SELFTEST=1"}
     freshness: new-current
     reported: null
-    published: null
+    published: pending
   - key: live-subscriber-isolation-unsub-one
     title: Unsubscribe one leaves others live
     description: >-
       Two callbacks subscribed to one live.query; unsubscribe the first, then
       commit a mutation. The second callback must still fire and the backing
       view/state tables must still exist; the first must not fire.
-    status: ready
-    result: null
+    status: done
+    result: finding
     reason: null
     workload: workloads/live_subscriber_isolation.mjs
     command: node .workers/workloads/live_subscriber_isolation.mjs --case unsub-one
     faults: []
     depth: 12
-    replay: null
+    replay: {harness: local-node, case: unsub-one, seed: 431957136, note: "deterministic red; not seed-dependent"}
     freshness: new-current
     reported: null
-    published: null
+    published: pending
   - key: live-subscriber-isolation-variants
     title: Isolation across live.changes and incrementalQuery
     description: >-
       Same unsubscribe-one attack on live.changes and live.incrementalQuery
       (the two other subscriber-set copies), asserting incremental state
       (state1/state2, diff prepared statements) is not DEALLOCATEd.
-    status: planned
-    result: null
+    status: done
+    result: finding
     reason: null
     workload: workloads/live_subscriber_isolation.mjs
     command: node .workers/workloads/live_subscriber_isolation.mjs --case variants
     faults: []
     depth: 12
-    replay: null
+    replay: {harness: local-node, case: variants, note: "both live.changes and live.incrementalQuery red"}
     freshness: new-current
     reported: null
-    published: null
+    published: pending
 ---
 # Live-query subscribers are isolated
 

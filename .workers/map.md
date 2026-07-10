@@ -72,4 +72,5 @@ No module is in neither state; breadth floor satisfied for this refresh.
 
 | Key | Severity | Class | Upstream | Status |
 |-----|----------|-------|----------|--------|
-| _(none promoted yet — three source-confirmed candidates in flight, awaiting executor RED: live-subscriber-isolation, tx-closed-handle, notify-quoted-unlisten)_ | | | | |
+| live-subscriber-isolation | correctness (3) | live-query subscriber teardown | pending dossier | RED confirmed — `unsubscribe(cb)` removes ALL subscribers + tears down state; all 3 variants (query/changes/incrementalQuery). `runs/live-subscriber-isolation-unsub-one.md` |
+| _(2 more source-confirmed candidates in flight: tx-closed-handle, notify-quoted-unlisten)_ | | | | |
