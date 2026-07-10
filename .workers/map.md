@@ -32,6 +32,15 @@ Static evidence index. Not a queue: no owners, no claims, no priorities.
 - Live queries, extensions (pgvector, pgmq recently added — d4fb8ec), and the
   `/dump`+`loadDataDir` snapshot path are additional promise surfaces.
 
+## Guest reality (executor)
+- Guest node **v20.15.1**; box node v22. Runs execute the committed git tree at
+  `/workspace`; gitignored build.sh output is absent — workloads extract the
+  vendored tarball to `/tmp` via `.workers/workloads/_run.sh` (see executor-notes).
+- **OPEN BLOCKER:** `PGlite.create()` wedges in the deterministic sim (emscripten
+  async WASM init never resolves — process idles into the liveness watchdog). All
+  official guest verdicts are blocked; the 3 findings stand on local reproduction.
+  Investigation leads in `runs/executor-notes.md`. Re-plan trigger set.
+
 ## Areas
 
 | Key | Title | Focus | Status |

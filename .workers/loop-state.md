@@ -1,21 +1,32 @@
 # Loop state
 - rails: { loops: 100, workloads: 250 }   # from /goal args or defaults — safety rails, not targets
-- counters: { episodes: 4, producer: 1, executor: 3, workloads: 9 }
+- counters: { episodes: 5, producer: 1, executor: 3, workloads: 9 }
 - no-new-info: { streak: 0, K: 5 }
 - in-flight unit: none
-- re-entry: notify-quoted-unlisten-quoted → switch — confirmed finding (quoted red, baseline green). registry-parity rung stays planned. L→5 (red); no same-[path pglite-utils:toPostgresName] sibling in backlog → no inherit. Remaining ready work (tx-atomicity-recovery, exec, durable baseline) plus the wio official publication of 3 held findings outrank deepening here. Streak reset (finding).
+- re-entry: none
 - last-scanned-sha: 1a4cce1ab9ad5e13cbef9072ea005046f153ad9b
 - target-head-sha: 1a4cce1ab9ad5e13cbef9072ea005046f153ad9b
-- re-plan triggers: none
-- publish-pending: [live-subscriber-isolation-baseline, live-subscriber-isolation-unsub-one, live-subscriber-isolation-variants, tx-closed-handle-baseline, tx-closed-handle-sql-after-rollback, tx-closed-handle-after-throw, notify-quoted-unlisten-baseline, notify-quoted-unlisten-quoted]
+- re-plan triggers: >
+    guest-integration-blocker — PGlite.create() wedges in the deterministic sim
+    (emscripten async WASM init never resolves; all official guest runs fail into
+    the liveness watchdog). Blocks official publication of every exploration.
+    Investigation leads in runs/executor-notes.md §OPEN BLOCKER. This is a
+    harness/product-integration issue, NOT a spec deficiency — the 3 findings hold
+    on local reproduction. A producer/triage episode should resolve or escalate it
+    (likely a wio-side MessageChannel scheduling gap → file against formal) before
+    executor episodes can earn guest verdicts.
+- publish-pending: []   # all 8 fired official runs at fixed HEAD 56bd84e, but guest verdicts blocked (see re-plan trigger); page rows exist, verdicts are watchdog-FAIL not real oracle results
 - last episode summary: >
-    Episode 4 (executor → notify-quoted-unlisten). Built
-    workloads/notify_quoted_unlisten.mjs. Local node draft vs vendored 0.5.4:
-    baseline GREEN (lowercase disposer works; selftest FAILs, anti-vacuity);
-    quoted RED — after unsub() on channel '"MyChannel"', pg_notify still fires the
-    callback (toPostgresName double-normalize → UNLISTEN targets wrong lowercase
-    name). CONFIRMED FINDING (correctness, sev 2). Test-reviewer (emulated): KEEP.
-    THREE confirmed findings now held (live sev3, tx-closed sev3, notify sev2), all
-    published: pending. Next: publish the 3 findings officially via wio
-    (commit+push → projects prepare → publish.py official runs), then continue
-    executor on tx-atomicity-recovery (reentrant-hang hypothesis).
+    Episode 5 (executor publication + guest integration). Fixed the vendored-import
+    setup blocker (_run.sh extracts tarball to /tmp; workloads resolve via
+    PGLITE_BASE). Pushed to fork, re-prepared image (56bd84e), published all 8
+    officials (3 findings + baselines) via publish.py (transient convex 503s
+    cleared on retry). BUT guest runs now wedge in PGlite.create() — emscripten
+    WASM async init never resolves in the deterministic sim; every run is
+    watchdog-FAIL, not a real verdict. Recorded as an OPEN BLOCKER + re-plan
+    trigger with investigation leads. The 3 confirmed findings (live sev3,
+    tx-closed sev3, notify sev2) stand on local reproduction with replayable
+    invariant evidence in runs/. NEXT (dispatcher row 4 → producer/triage): resolve
+    or escalate the guest-init blocker; meanwhile ready explorations
+    (tx-atomicity-recovery reentrant-hang, exec-batch reporting, durable baseline)
+    can be built + locally reproduced. Coverage NOT exhausted — not a FLEET-STOP.

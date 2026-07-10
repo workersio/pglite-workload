@@ -30,6 +30,33 @@ never bare `node …`. Local runs still work (PGLITE_BASE unset → local vendor
 symlink). `/tmp` is writable in-guest; `/workspace` writability is untested —
 _run.sh avoids it by extracting to /tmp.
 
+## OPEN BLOCKER: PGlite WASM init wedges in the deterministic sim
+After the import fix, every guest run reaches `SEED=`/`CASE=` (printed before
+`PGlite.create()`) and then **wedges** — the liveness watchdog fires at 20s and
+virtual time fast-forwards to it (VTIME jumps ~96s), meaning the process went
+**idle** with only the watchdog timer pending. So `PGlite.create()` returns a
+promise that never resolves in the sim: PGlite's emscripten async init is
+waiting on an event the deterministic simulator does not deliver (suspected
+`MessageChannel`/`setImmediate`/microtask-scheduling path used by emscripten's
+async WASM instantiation). Locally (real node) the same call resolves in <1s.
+
+This blocks ALL official guest verdicts — every run shows `state: failed` with
+`INVARIANT wd liveness_watchdog FAIL`, NOT the real oracle result. The three
+findings stand on **local** reproduction (strong, replayable, deterministic);
+the guest publication is parked on this blocker.
+
+Next-session leads to try (cheapest first):
+1. A minimal probe workload: `PGlite.create()` then print a MARK — confirm
+   create() is the exact hang point and time it under a longer watchdog (60s+).
+2. Bump `--mem` (WASM may need >1024 MiB) and/or `--timeout`; raise the workload
+   watchdog above the sim's init cost.
+3. Check whether PGlite exposes a sync/eager init or a way to avoid the
+   MessageChannel path in node; try `import '.../dist/index.cjs'` (CJS build) in
+   case the ESM async path differs.
+4. If it is a simulator scheduling gap (MessageChannel not serviced), that is a
+   wio-side integration issue to file against the product (formal), not a pglite
+   bug — record as such.
+
 ## Oracle plane conventions used here (node workloads)
 - Liveness watchdog: `setTimeout(...).unref()` → emits `INVARIANT wd
   liveness_watchdog FAIL` and `process.exit(1)` on wedge.
