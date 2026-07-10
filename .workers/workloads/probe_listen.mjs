@@ -24,8 +24,10 @@ try {
   let fires = 0
   const unsub = await step('listen', () => db.listen('testchan', () => { fires++ }))
   await step('pg_notify', async () => (await db.query(`SELECT pg_notify('testchan','x')`)).rows)
-  // give any microtask delivery a couple of macrotask turns
-  await step('settle', () => new Promise((r) => setTimeout(r, 200)))
+  // BLOCKER #2 probe: notification delivery is queueMicrotask (pglite.ts:1105),
+  // and after the LISTEN/NOTIFY path a setTimeout never fires (macrotask
+  // starvation). So drain MICROTASKS instead of using a timer.
+  await step('settle_microtask', async () => { for (let i = 0; i < 100; i++) await Promise.resolve() })
   emit(`INVARIANT deliver fires_after_notify ${fires > 0 ? 'PASS' : 'FAIL'} fires=${fires}`)
   await step('unlisten', () => unsub())
   await step('close', () => db.close())
