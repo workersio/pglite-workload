@@ -27,7 +27,7 @@ explorations:
     replay: {harness: local-node, case: baseline, note: "green; FAILs under ORACLE_SELFTEST=1"}
     freshness: new-current
     reported: null
-    published: null
+    published: nd786ywbbyfdq4e7ptsqjmk2mn8a9ra0
   - key: tx-atomicity-recovery-reentrant
     title: Reentrant parent-handle call must not hang
     description: >-
@@ -45,7 +45,7 @@ explorations:
     replay: {harness: local-node, case: reentrant, note: "parent-handle db.query inside tx deadlocks (timeout at 4s)"}
     freshness: new-current
     reported: null
-    published: null
+    published: nd7b99strg4mdke8qpkzzd76gx8a9bhx
   - key: tx-atomicity-recovery-aborted-state
     title: Recovery after in-transaction statement error
     description: >-
