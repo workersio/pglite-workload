@@ -74,4 +74,4 @@ No module is in neither state; breadth floor satisfied for this refresh.
 |-----|----------|-------|----------|--------|
 | live-subscriber-isolation | correctness (3) | live-query subscriber teardown | pending dossier | RED confirmed — `unsubscribe(cb)` removes ALL subscribers + tears down state; all 3 variants (query/changes/incrementalQuery). `runs/live-subscriber-isolation-unsub-one.md` |
 | tx-closed-handle | correctness / data-integrity (3) | tx handle writes after end | pending dossier | RED confirmed — `tx.sql` never guards + `closed` never set on throw; retained handle persists writes on auto-commit after rollback/throw. `runs/tx-closed-handle.md` |
-| _(1 more source-confirmed candidate in flight: notify-quoted-unlisten)_ | | | | |
+| notify-quoted-unlisten | correctness (2) | quoted-channel unsubscribe | pending dossier | RED confirmed — disposer double-normalizes a quoted channel (toPostgresName not idempotent); callback keeps firing after unsubscribe. `runs/notify-quoted-unlisten.md` |

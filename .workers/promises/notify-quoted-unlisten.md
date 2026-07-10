@@ -17,17 +17,17 @@ explorations:
       listen on a plain lowercase channel, unsubscribe via the returned disposer,
       then NOTIFY — the callback must not fire. Proves the oracle observes a
       working unsubscribe on the already-tested path.
-    status: ready
-    result: null
+    status: done
+    result: green
     reason: null
     workload: workloads/notify_quoted_unlisten.mjs
     command: node .workers/workloads/notify_quoted_unlisten.mjs --case baseline
     faults: []
     depth: 6
-    replay: null
+    replay: {harness: local-node, case: baseline, note: "green; FAILs under ORACLE_SELFTEST=1"}
     freshness: new-current
     reported: null
-    published: null
+    published: pending
   - key: notify-quoted-unlisten-quoted
     title: Quoted-channel unsubscribe must stop delivery
     description: >-
@@ -35,17 +35,17 @@ explorations:
       returned disposer, then NOTIFY that channel. The callback must NOT fire.
       Source shows the disposer targets the wrong (re-lowercased) name, so the
       listener stays live — expected red.
-    status: ready
-    result: null
+    status: done
+    result: finding
     reason: null
     workload: workloads/notify_quoted_unlisten.mjs
     command: node .workers/workloads/notify_quoted_unlisten.mjs --case quoted
     faults: []
     depth: 8
-    replay: null
+    replay: {harness: local-node, case: quoted, note: "callback fired after unsubscribe on quoted channel MyChannel"}
     freshness: new-current
     reported: null
-    published: null
+    published: pending
   - key: notify-quoted-unlisten-registry-parity
     title: JS registry parity with pg_listening_channels
     description: >-
