@@ -209,6 +209,14 @@ def main() -> None:
                 print("  runtime slots busy, retrying in 30s")
                 time.sleep(30)
                 continue
+            # transient convex backend contention (OCC / 503) — retry
+            if (
+                ("OptimisticConcurrencyControlFailure" in err or "503" in err)
+                and time.monotonic() < deadline
+            ):
+                print("  backend contention (OCC/503), retrying in 10s")
+                time.sleep(10)
+                continue
             raise SystemExit(f"  publish failed:\n{err}")
         entry["published"] = json.loads(result.stdout)["explorationId"]
         print(f"  published: {entry['published']} — draining before next")

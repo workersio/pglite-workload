@@ -36,14 +36,21 @@ Static evidence index. Not a queue: no owners, no claims, no priorities.
 - Guest node **v20.15.1**; box node v22. Runs execute the committed git tree at
   `/workspace`; gitignored build.sh output is absent — workloads extract the
   vendored tarball to `/tmp` via `.workers/workloads/_run.sh` (see executor-notes).
-- **RESOLVED BLOCKER (2026-07-10):** `PGlite.create()` wedged in the sim on two
-  event-loop-blocked ops (async WASM *compile* + async `fs.readFile`). Fix: the
-  sync-init shim `.workers/workloads/_pglite.mjs` pre-compiles the WASM modules
-  (`pgliteWasmModule`/`initdbWasmModule`) and passes the FS image as an `fsBundle`
-  Blob, forcing microtask-only init the sim services. Proven by `probe_init_sync`
-  (`INVARIANT pglite_init_sync PASS`). Guest verdicts unblocked; every workload
-  must build the DB via `_pglite.mjs`, never bare `PGlite.create()`. Details:
-  `runs/executor-notes.md §RESOLVED BLOCKER`.
+- **Guest init: RESOLVED (2026-07-10).** `PGlite.create()` wedged in the sim on
+  THREE event-loop dependencies: async WASM *compile*, async `fs.readFile`, and
+  the async `WebAssembly.instantiate(module, imports)` task (flaky even with a
+  pre-compiled Module). Fix (`.workers/workloads/_pglite.mjs`): pre-compile the
+  WASM modules + pass the FS image as an `fsBundle` Blob, AND monkeypatch the
+  global `WebAssembly.instantiate` to `new WebAssembly.Instance()` (fully
+  synchronous). Every workload MUST build the DB via `_pglite.mjs`. Proven by
+  `probe_ops` (create + queries + exec + transaction all `succeeded` in-guest).
+  query/exec/transaction workloads now give clean guest verdicts.
+- **BLOCKER #2: LISTEN/NOTIFY + live-query delivery is unserviced in the sim
+  (OPEN).** `db.listen()` / `db.live.query()` SETUP wedges post-init (baseline
+  included) — NOT workload-shimmable (internal runtime async delivery). So
+  `notify-quoted-unlisten` + `live-subscriber-isolation` are `guest: blocked`
+  and stand on LOCAL reproduction; publish.py skips them. Leads +
+  candidate-escalation in `runs/executor-notes.md §OPEN BLOCKER #2`.
 
 ## Areas
 
