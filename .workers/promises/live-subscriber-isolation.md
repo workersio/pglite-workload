@@ -24,7 +24,7 @@ explorations:
     replay: {harness: local-node, case: baseline, note: "green; also FAILs under ORACLE_SELFTEST=1"}
     freshness: new-current
     reported: null
-    published: pending
+    published: nd72s3vvtmsxes9j359qjgb3m18a9ggd
   - key: live-subscriber-isolation-unsub-one
     title: Unsubscribe one leaves others live
     description: >-
@@ -41,7 +41,7 @@ explorations:
     replay: {harness: local-node, case: unsub-one, seed: 431957136, note: "deterministic red; not seed-dependent"}
     freshness: new-current
     reported: null
-    published: pending
+    published: nd752vrsm692sxaz8q7xx8zrc58a8svg
   - key: live-subscriber-isolation-variants
     title: Isolation across live.changes and incrementalQuery
     description: >-
@@ -58,7 +58,7 @@ explorations:
     replay: {harness: local-node, case: variants, note: "both live.changes and live.incrementalQuery red"}
     freshness: new-current
     reported: null
-    published: pending
+    published: nd768022sz6d78gvrnc93weggd8a9c1k
 ---
 # Live-query subscribers are isolated
 
