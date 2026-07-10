@@ -45,6 +45,15 @@ This blocks ALL official guest verdicts — every run shows `state: failed` with
 findings stand on **local** reproduction (strong, replayable, deterministic);
 the guest publication is parked on this blocker.
 
+**Probe result (2026-07-10, run 01KX5YSEWYF6DJZT965XD5JCMC):** `probe_init.mjs`
+with `--mem 2048 --timeout 120` prints `MARK d_before_create` then wedges — the
+hang is precisely inside `PGlite.create()`, and it is NOT memory- or
+timeout-bound. Import resolves fine (`c_imported`). So emscripten's async WASM/
+data init inside create() never completes in the sim. Strongly points to a
+simulator scheduling gap (async `fs` callback / MessageChannel / setImmediate not
+serviced) → escalate to formal (wio) as a product-integration bug, unless a
+PGlite eager/sync-init or CJS path sidesteps it.
+
 Next-session leads to try (cheapest first):
 1. A minimal probe workload: `PGlite.create()` then print a MARK — confirm
    create() is the exact hang point and time it under a longer watchdog (60s+).

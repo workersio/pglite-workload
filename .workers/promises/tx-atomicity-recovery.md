@@ -17,14 +17,14 @@ explorations:
       A transaction callback inserts a row then throws; the row must be absent
       afterward and the next top-level query must succeed. Proves the oracle
       sees both the atomicity and the recovery invariants.
-    status: ready
-    result: null
+    status: done
+    result: green
     reason: null
     workload: workloads/tx_atomicity_recovery.mjs
     command: sh .workers/workloads/_run.sh .workers/workloads/tx_atomicity_recovery.mjs --case baseline
     faults: []
     depth: 8
-    replay: null
+    replay: {harness: local-node, case: baseline, note: "green; FAILs under ORACLE_SELFTEST=1"}
     freshness: new-current
     reported: null
     published: null
@@ -35,14 +35,14 @@ explorations:
       common `await db.query` instead of `await tx.query` mistake). It must
       resolve or reject within a bounded deadline, never block forever on the
       non-reentrant mutex.
-    status: ready
-    result: null
+    status: done
+    result: finding
     reason: null
     workload: workloads/tx_atomicity_recovery.mjs
     command: sh .workers/workloads/_run.sh .workers/workloads/tx_atomicity_recovery.mjs --case reentrant
     faults: []
     depth: 10
-    replay: null
+    replay: {harness: local-node, case: reentrant, note: "parent-handle db.query inside tx deadlocks (timeout at 4s)"}
     freshness: new-current
     reported: null
     published: null
